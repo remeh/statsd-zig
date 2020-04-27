@@ -8,15 +8,11 @@ const warn = std.debug.warn;
 const allocator = std.allocator;
 
 const Parser = @import("parser.zig").Parser;
-const Metric = @import("metric.zig").Metric; 
+const Metric = @import("metric.zig").Metric;
 
-// this method receives a metric and its value such as:
-// custom_metric:50.1
-//pub fn separate_name_value(metric: []u8) Metric {
-//}
-
-//pub fn parse_packet(slice: []u8) !void {
-//}
+const ThreadContext = struct {
+    q: std.atomic.Queue([]u8)
+};
 
 fn open_socket() !i32 {
     var sockfd: i32 = try os.socket(
@@ -29,31 +25,46 @@ fn open_socket() !i32 {
     return sockfd;
 }
 
-fn read_packet(sockfd: i32) ?[]u8 {
-    var buf: [1500]u8 = undefined;
-    var bufSlice: []u8 = &buf;
-    var sl: u32 = @sizeOf(os.sockaddr_in);
-    const rlen = os.recvfrom(sockfd, bufSlice, 0, null, null) catch return null;
-    if (rlen == 0) {
-        return null;
+fn listener(context: *ThreadContext) !void {
+    var sockfd: i32 = try open_socket();
+    std.debug.warn("starting the listener on 127.0.0.1:8125\n", .{});
+    while (true) {
+        var buf: [1500]u8 = undefined;
+        var bufSlice: []u8 = &buf;
+        var sl: u32 = @sizeOf(os.sockaddr_in);
+        const rlen = os.recvfrom(sockfd, bufSlice, 0, null, null) catch continue;
+        if (rlen == 0) {
+            continue;
+        }
+        std.debug.warn("received {}\n", .{bufSlice});
+        // FIXME(remy): it is properly recceived here, however, that is most likely
+        // that the std.atomic.Queue is storing the data on the stack and the other
+        // thread can't read the value? std.event.Channel may be the way to go, or not.
+        var entry = std.atomic.Queue([]u8).Node{
+            .data = bufSlice,
+        };
+        context.q.put(&entry);
+        // TODO(remy): write bufSlice in a queue
     }
-
-    return bufSlice;
 }
 
 pub fn main() !void {
-    var sockfd: i32 = try open_socket();
+    var queue = std.atomic.Queue([]u8).init();
+    var tx = ThreadContext{ .q = queue };
+    var listener_thread = std.Thread.spawn(&tx, listener);
     // mainloop
     while (true) {
-        var buf = read_packet(sockfd);
-        if (buf == null) { continue; }
-        _ = async Parser.parse_packet(buf.?);
-//        if (await frame) |metrics| {
-//            warn("parsed metrics: {}\n", .{metrics.span()});
-//        } else |err| {
-//            warn("can't parse packet: {}\n", .{err});
-//            warn("packet: {}\n", .{bufSlice});
-//        }
+        std.debug.warn("parse some packets\n", .{});
+        while (!tx.q.isEmpty()) {
+            var buf = tx.q.get();
+            if (Parser.parse_packet(buf.?.data)) |metrics| {
+                warn("parsed metrics: {}\n", .{metrics.span()});
+            } else |err| {
+                warn("can't parse packet: {}\n", .{err});
+                warn("packet: {}\n", .{buf.?.data});
+            }
+        }
+        std.time.sleep(1000000000);
     }
 }
 
