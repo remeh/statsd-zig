@@ -5,7 +5,8 @@ const os = std.os;
 const net = std.net;
 const assert = std.debug.assert;
 const warn = std.debug.warn;
-const allocator = std.allocator;
+const allocator = std.heap.page_allocator;
+const Queue = std.atomic.Queue;
 
 const Parser = @import("parser.zig").Parser;
 const Metric = @import("metric.zig").Metric;
@@ -27,42 +28,43 @@ fn open_socket() !i32 {
 
 fn listener(context: *ThreadContext) !void {
     var sockfd: i32 = try open_socket();
-    std.debug.warn("starting the listener on 127.0.0.1:8125\n", .{});
+    warn("starting the listener on 127.0.0.1:8125\n", .{});
     while (true) {
-        var buf: [1500]u8 = undefined;
-        var bufSlice: []u8 = &buf;
         var sl: u32 = @sizeOf(os.sockaddr_in);
-        const rlen = os.recvfrom(sockfd, bufSlice, 0, null, null) catch continue;
+        var buf = try allocator.alloc(u8, 8192);
+        const rlen = os.recvfrom(sockfd, buf, 0, null, null) catch {
+            allocator.free(buf);
+            continue;
+        };
         if (rlen == 0) {
+            allocator.free(buf);
             continue;
         }
-        std.debug.warn("received {}\n", .{bufSlice});
-        // FIXME(remy): it is properly recceived here, however, that is most likely
-        // that the std.atomic.Queue is storing the data on the stack and the other
-        // thread can't read the value? std.event.Channel may be the way to go, or not.
-        var entry = std.atomic.Queue([]u8).Node{
-            .data = bufSlice,
+        var entry = Queue([]u8).Node{
+            .data = buf,
         };
         context.q.put(&entry);
-        // TODO(remy): write bufSlice in a queue
     }
 }
 
 pub fn main() !void {
-    var queue = std.atomic.Queue([]u8).init();
+    var queue = Queue([]u8).init();
     var tx = ThreadContext{ .q = queue };
     var listener_thread = std.Thread.spawn(&tx, listener);
     // mainloop
     while (true) {
-        std.debug.warn("parse some packets\n", .{});
+        warn("parse some packets\n", .{});
         while (!tx.q.isEmpty()) {
             var buf = tx.q.get();
-            if (Parser.parse_packet(buf.?.data)) |metrics| {
-                warn("parsed metrics: {}\n", .{metrics.span()});
-            } else |err| {
-                warn("can't parse packet: {}\n", .{err});
-                warn("packet: {}\n", .{buf.?.data});
-            }
+            warn("got from the queue: {}\n", .{buf.?.data});
+//            if (Parser.parse_packet(buf.?.data)) |metrics| {
+//                warn("parsed metrics: {}\n", .{metrics.span()});
+//            } else |err| {
+//                warn("can't parse packet: {}\n", .{err});
+//                warn("packet: {}\n", .{buf.?.data});
+//            }
+            // TODO(remy): release the memory
+            allocator.free(buf.?.data);
         }
         std.time.sleep(1000000000);
     }

@@ -41,14 +41,14 @@ pub const Parser = struct {
     }
 
     // TODO(remy): use a pre-allocated array with an int of how many metrics it contains
-    pub fn parse_packet(metric_packet: []const u8) !std.ArrayList(metric.Metric) {
+    pub fn parse_packet(metric_packet: [8192]u8) !std.ArrayList(metric.Metric) {
         std.debug.warn("in", .{});
-        var iterator = std.mem.split(metric_packet, "\n");
+        var iterator = std.mem.split(&metric_packet, "\n");
         const part: ?[]const u8 = iterator.next();
         var idx: u8 = 0;
-        
+
         var rv = std.ArrayList(metric.Metric).init(std.heap.page_allocator);
-        
+
         while (part != null) {
             var m: metric.Metric = try parse_metric(part.?);
             _ = try rv.append(m);
@@ -62,13 +62,13 @@ pub const Parser = struct {
         var iterator = std.mem.split(packet, "|");
         const part: ?[]const u8 = iterator.next();
         var idx: u8 = 0;
-        
+
         var rv: metric.Metric = metric.Metric{
           .name = "",
           .value = 0.0,
           .type = metric.MetricTypeUnknown,
         };
-        
+
         while (part != null) {
             switch (idx) {
                 0 => {
@@ -89,13 +89,13 @@ pub const Parser = struct {
             idx += 1;
             part = iterator.next();
         }
-        
+
         if (idx < 2) {
             return ParsingError.MalformedPacket;
         }
 
 //        std.debug.warn("{}\n", .{rv});
-        
+
         return rv;
     }
 };
