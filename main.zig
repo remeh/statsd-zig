@@ -29,21 +29,25 @@ fn open_socket() !i32 {
 fn listener(context: *ThreadContext) !void {
     var sockfd: i32 = try open_socket();
     warn("starting the listener on 127.0.0.1:8125\n", .{});
+    var buf = try allocator.alloc(u8, 8192);
     while (true) {
-        var sl: u32 = @sizeOf(os.sockaddr_in);
-        var buf = try allocator.alloc(u8, 8192);
         const rlen = os.recvfrom(sockfd, buf, 0, null, null) catch {
-            allocator.free(buf);
             continue;
         };
         if (rlen == 0) {
-            allocator.free(buf);
             continue;
         }
-        var entry = Queue([]u8).Node{
-            .data = buf,
-        };
-        context.q.put(&entry);
+
+        var copy = try allocator.alloc(u8, 8192);
+        var i: usize = 0;
+        while (i < 8192) {
+            copy[i] = buf[i];
+            i += 1;
+        }
+
+        var node: []Queue([]u8).Node = try allocator.alloc(Queue([]u8).Node, 1);
+        node[0].data = copy;
+        context.q.put(&node[0]);
     }
 }
 
@@ -55,8 +59,8 @@ pub fn main() !void {
     while (true) {
         warn("parse some packets\n", .{});
         while (!tx.q.isEmpty()) {
-            var buf = tx.q.get();
-            warn("got from the queue: {}\n", .{buf.?.data});
+            var node = tx.q.get().?;
+            warn("got from the queue: {}\n", .{node.data});
 //            if (Parser.parse_packet(buf.?.data)) |metrics| {
 //                warn("parsed metrics: {}\n", .{metrics.span()});
 //            } else |err| {
@@ -64,7 +68,7 @@ pub fn main() !void {
 //                warn("packet: {}\n", .{buf.?.data});
 //            }
             // TODO(remy): release the memory
-            allocator.free(buf.?.data);
+            allocator.free(node.data);
         }
         std.time.sleep(1000000000);
     }
