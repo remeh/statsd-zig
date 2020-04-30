@@ -41,9 +41,8 @@ pub const Parser = struct {
     }
 
     // TODO(remy): use a pre-allocated array with an int of how many metrics it contains
-    pub fn parse_packet(metric_packet: [8192]u8) !std.ArrayList(metric.Metric) {
-        std.debug.warn("in", .{});
-        var iterator = std.mem.split(&metric_packet, "\n");
+    pub fn parse_packet(metric_packet: []u8) !std.ArrayList(metric.Metric) {
+        var iterator = std.mem.split(metric_packet, "\n");
         const part: ?[]const u8 = iterator.next();
         var idx: u8 = 0;
 
@@ -93,8 +92,6 @@ pub const Parser = struct {
         if (idx < 2) {
             return ParsingError.MalformedPacket;
         }
-
-//        std.debug.warn("{}\n", .{rv});
 
         return rv;
     }

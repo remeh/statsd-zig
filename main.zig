@@ -12,7 +12,11 @@ const Parser = @import("parser.zig").Parser;
 const Metric = @import("metric.zig").Metric;
 
 const ThreadContext = struct {
-    q: std.atomic.Queue([]u8)
+    // packets read from the network
+    q: std.atomic.Queue([]u8),
+    // buffers available to share data between the listener thread
+    // and the parser thread.
+    b: std.atomic.Queue([]u8)
 };
 
 fn open_socket() !i32 {
@@ -29,7 +33,11 @@ fn open_socket() !i32 {
 fn listener(context: *ThreadContext) !void {
     var sockfd: i32 = try open_socket();
     warn("starting the listener on 127.0.0.1:8125\n", .{});
-    var buf = try allocator.alloc(u8, 8192);
+
+    // reading buffer
+    var array: [8192]u8 = undefined;
+    var buf: []u8 = &array;
+
     while (true) {
         const rlen = os.recvfrom(sockfd, buf, 0, null, null) catch {
             continue;
@@ -38,39 +46,67 @@ fn listener(context: *ThreadContext) !void {
             continue;
         }
 
-        var copy = try allocator.alloc(u8, 8192);
+        if (context.b.isEmpty()) {
+            // no more pre-allocated buffers available, this packet will be dropped.
+            continue;
+        }
+
+        // take a pre-allocated buffers
+        var node = context.b.get().?;
+
+        // copy the data
         var i: usize = 0;
         while (i < 8192) {
-            copy[i] = buf[i];
+            node.data[i] = buf[i];
+            if (buf[i] == 0) { break; }
+            buf[i] = 0;
             i += 1;
         }
 
-        var node: []Queue([]u8).Node = try allocator.alloc(Queue([]u8).Node, 1);
-        node[0].data = copy;
-        context.q.put(&node[0]);
+        // send it for processing
+        context.q.put(node);
     }
 }
 
 pub fn main() !void {
+    // queue communicating packets to parse
     var queue = Queue([]u8).init();
-    var tx = ThreadContext{ .q = queue };
+
+    // pre-alloc 65535 buffers that will be re-used to contain the read data
+    // these buffers will do round-trips between the listener and the parser
+    var buffers = Queue([]u8).init();
+    var i: usize = 0;
+    while (i < 65535) { // 512MB
+        var node: *Queue([]u8).Node = try allocator.create(Queue([]u8).Node);
+        node.data = try allocator.alloc(u8, 8192);
+        buffers.put(node);
+        i += 1;
+    }
+
+    // shared context
+    var tx = ThreadContext{
+      .q = queue,
+      .b = buffers,
+    };
+
+    // spawn the listening thread
     var listener_thread = std.Thread.spawn(&tx, listener);
+
     // mainloop
     while (true) {
-        warn("parse some packets\n", .{});
         while (!tx.q.isEmpty()) {
             var node = tx.q.get().?;
-            warn("got from the queue: {}\n", .{node.data});
-//            if (Parser.parse_packet(buf.?.data)) |metrics| {
-//                warn("parsed metrics: {}\n", .{metrics.span()});
-//            } else |err| {
-//                warn("can't parse packet: {}\n", .{err});
-//                warn("packet: {}\n", .{buf.?.data});
-//            }
-            // TODO(remy): release the memory
-            allocator.free(node.data);
+
+            if (Parser.parse_packet(node.data)) |metrics| {
+//                warn("# metrics parsed: {}\n", .{metrics.span().len});
+            } else |err| {
+                warn("can't parse packet: {}\n", .{err});
+                warn("packet: {}\n", .{node.data});
+            }
+
+            // send this buffer back to the usable queue of buffers
+            tx.b.put(node);
         }
-        std.time.sleep(1000000000);
     }
 }
 
