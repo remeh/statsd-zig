@@ -41,12 +41,12 @@ pub const Parser = struct {
     }
 
     // TODO(remy): use a pre-allocated array with an int of how many metrics it contains
-    pub fn parse_packet(metric_packet: []u8) !std.ArrayList(metric.Metric) {
+    pub fn parse_packet(allocator: *std.mem.Allocator, metric_packet: []u8) !std.ArrayList(metric.Metric) {
         var iterator = std.mem.split(metric_packet, "\n");
         const part: ?[]const u8 = iterator.next();
         var idx: u8 = 0;
 
-        var rv = std.ArrayList(metric.Metric).init(std.heap.page_allocator);
+        var rv = std.ArrayList(metric.Metric).init(allocator);
 
         while (part != null) {
             var m: metric.Metric = try parse_metric(part.?);

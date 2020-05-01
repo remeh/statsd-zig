@@ -5,11 +5,15 @@ const os = std.os;
 const net = std.net;
 const assert = std.debug.assert;
 const warn = std.debug.warn;
-const allocator = std.heap.page_allocator;
 const Queue = std.atomic.Queue;
 
 const Parser = @import("parser.zig").Parser;
 const Metric = @import("metric.zig").Metric;
+
+const Packet = struct {
+    content: []u8,
+    len: usize
+};
 
 const ThreadContext = struct {
     // packets read from the network
@@ -53,16 +57,8 @@ fn listener(context: *ThreadContext) !void {
 
         // take a pre-allocated buffers
         var node = context.b.get().?;
-
         // copy the data
-        var i: usize = 0;
-        while (i < 8192) {
-            node.data[i] = buf[i];
-            if (buf[i] == 0) { break; }
-            buf[i] = 0;
-            i += 1;
-        }
-
+        std.mem.copy(u8, node.data[0..rlen], buf[0..rlen]);
         // send it for processing
         context.q.put(node);
     }
@@ -77,8 +73,8 @@ pub fn main() !void {
     var buffers = Queue([]u8).init();
     var i: usize = 0;
     while (i < 65535) { // 512MB
-        var node: *Queue([]u8).Node = try allocator.create(Queue([]u8).Node);
-        node.data = try allocator.alloc(u8, 8192);
+        var node: *Queue([]u8).Node = try std.heap.page_allocator.create(Queue([]u8).Node);
+        node.data = try std.heap.page_allocator.alloc(u8, 8192);
         buffers.put(node);
         i += 1;
     }
@@ -92,13 +88,17 @@ pub fn main() !void {
     // spawn the listening thread
     var listener_thread = std.Thread.spawn(&tx, listener);
 
+    // prepare the allocator used by the parser
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+
     // mainloop
     while (true) {
         while (!tx.q.isEmpty()) {
             var node = tx.q.get().?;
 
-            if (Parser.parse_packet(node.data)) |metrics| {
-//                warn("# metrics parsed: {}\n", .{metrics.span().len});
+            if (Parser.parse_packet(&arena.allocator, node.data)) |metrics| {
+//               warn("# metrics parsed: {}\n", .{metrics.span().len});
             } else |err| {
                 warn("can't parse packet: {}\n", .{err});
                 warn("packet: {}\n", .{node.data});
