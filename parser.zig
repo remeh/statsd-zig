@@ -1,5 +1,8 @@
 const std = @import("std");
+const assert = @import("std").debug.assert;
+
 const metric = @import("metric.zig");
+const Packet = @import("listener.zig").Packet;
 
 pub const ParsingError = error{
     MalformedNameValue,
@@ -9,10 +12,6 @@ pub const ParsingError = error{
 };
 
 pub const Parser = struct {
-    pub fn init() Parser {
-        return Parser{};
-    }
-
     fn split_name_and_value(string: []const u8) ParsingError!metric.Metric {
         var iterator = std.mem.split(string, ":");
         const part: ?[]const u8 = iterator.next();
@@ -20,6 +19,7 @@ pub const Parser = struct {
             .name = "",
             .value = 0.0,
             .type = metric.MetricTypeUnknown,
+            .tags = undefined,
         };
         var idx: u8 = 0;
         while (part != null) {
@@ -40,16 +40,15 @@ pub const Parser = struct {
         return rv;
     }
 
-    // TODO(remy): use a pre-allocated array with an int of how many metrics it contains
-    pub fn parse_packet(allocator: *std.mem.Allocator, metric_packet: []u8) !std.ArrayList(metric.Metric) {
-        var iterator = std.mem.split(metric_packet, "\n");
+    pub fn parse_packet(allocator: *std.mem.Allocator, metric_packet: Packet) !std.ArrayList(metric.Metric) {
+        var iterator = std.mem.split(metric_packet.payload[0..metric_packet.len], "\n");
         const part: ?[]const u8 = iterator.next();
-        var idx: u8 = 0;
 
         var rv = std.ArrayList(metric.Metric).init(allocator);
+        errdefer rv.deinit();
 
         while (part != null) {
-            var m: metric.Metric = try parse_metric(part.?);
+            var m: metric.Metric = try parse_metric(allocator, part.?);
             _ = try rv.append(m);
             part = iterator.next();
         }
@@ -57,29 +56,39 @@ pub const Parser = struct {
         return rv;
     }
 
-    pub fn parse_metric(packet: []const u8) ParsingError!metric.Metric {
+    pub fn parse_metric(allocator: *std.mem.Allocator, packet: []const u8) !metric.Metric {
         var iterator = std.mem.split(packet, "|");
         const part: ?[]const u8 = iterator.next();
         var idx: u8 = 0;
 
-        var rv: metric.Metric = metric.Metric{
-          .name = "",
-          .value = 0.0,
-          .type = metric.MetricTypeUnknown,
+        var rv: metric.Metric = metric.Metric {
+            .name = undefined,
+            .value = 0.0,
+            .type = metric.MetricTypeUnknown,
+            .tags = undefined,
         };
 
         while (part != null) {
             switch (idx) {
                 0 => {
+                    // name and value
                     const nv: metric.Metric = try split_name_and_value(part.?);
                     rv.name = nv.name;
                     rv.value = nv.value;
                 },
                 1 => {
-                    // TODO(remy): type
+                    // metric type
+                    if (part.?[0] == 'c') {
+                        rv.type = metric.MetricTypeCounter;
+                    } else if (part.?[0] == 'g') {
+                        rv.type = metric.MetricTypeGauge;
+                    }
                 },
                 2 => {
-                    // TODO(remy): implement me
+                    // metric tags
+                    if (parse_tags(allocator, part.?)) |tags| {
+                        rv.tags = tags;
+                    } else |err| { return ParsingError.MalformedTags; }
                 },
                 else => {
                     return ParsingError.MalformedPacket;
@@ -95,4 +104,33 @@ pub const Parser = struct {
 
         return rv;
     }
+
+    pub fn parse_tags(allocator: *std.mem.Allocator, buffer: []const u8) anyerror!metric.Tags {
+        var rv = metric.Tags.init(allocator);
+        errdefer rv.deinit();
+        if (buffer[0] != '#') { return ParsingError.MalformedTags; }
+        var iterator = std.mem.split(buffer[1..buffer.len], ",");
+        const part: ?[]const u8 = iterator.next();
+        while (part != null) {
+            _ = try rv.append(part.?);
+            part = iterator.next();
+        }
+        return rv;
+    }
 };
+
+test "split_name_and_value" {
+    const packet = "hello:5.0";
+
+    var m = try Parser.split_name_and_value(packet);
+    assert(std.mem.eql(u8, m.name, "hello"));
+    assert(m.value == 5.0);
+}
+
+test "parse_metric" {
+    const packet = "hello:5.0|c|#tags:hello";
+
+    var m = try Parser.parse_metric(packet);
+    assert(std.mem.eql(u8, m.name, "hello"));
+    assert(m.value == 5.0);
+}
