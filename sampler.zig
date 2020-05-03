@@ -90,9 +90,10 @@ pub const Sampler = struct {
         // TODO(remy): tags
         var h = fnv1a.init();
         h.update(m.name);
-        var it = m.tags.iterator();
-        while (it.next()) |tag| {
-            h.update(tag);
+        var i: usize = 0;
+        while (i < m.tags.span().len) {
+            h.update(m.tags.span()[i]);
+            i += 1;
         }
         return h.final();
     }
