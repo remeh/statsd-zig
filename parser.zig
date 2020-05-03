@@ -115,7 +115,15 @@ pub const Parser = struct {
             _ = try rv.append(part.?);
             part = iterator.next();
         }
+
+        var tags = rv.span();
+        std.sort.insertionSort([]const u8, tags, lessThanTags);
+
         return rv;
+    }
+
+    fn lessThanTags(l: []const u8, r: []const u8) bool {
+        return std.mem.lessThan(u8, l, r);
     }
 };
 
@@ -135,4 +143,16 @@ test "parse_metric" {
     assert(m.value == 5.0);
 
     m.tags.deinit();
+}
+
+test "parse_tags" {
+    const tags: []const u8 = "#my:tag,dev:env,z:value";
+    var rv = try Parser.parse_tags(std.testing.allocator, tags);
+
+    assert(rv.span().len == 3);
+    assert(std.mem.eql(u8, rv.span()[0], "dev:env"));
+    assert(std.mem.eql(u8, rv.span()[1], "my:tag"));
+    assert(std.mem.eql(u8, rv.span()[2], "z:value"));
+
+    rv.deinit();
 }
