@@ -9,6 +9,7 @@ const metric = @import("metric.zig");
 const Sample = struct {
     metric_name: []u8,
     metric_type: u8,
+    samples: u64,
     value: f32,
 };
 
@@ -30,6 +31,7 @@ pub const Sampler = struct {
             var newSample = Sample {
                 .metric_name = s.metric_name,
                 .metric_type = s.metric_type,
+                .samples = s.samples + 1,
                 .value = s.value,
             };
             switch (s.metric_type) {
@@ -51,6 +53,7 @@ pub const Sampler = struct {
         _ = try self.map.put(h, Sample{
             .metric_name = name,
             .metric_type = m.type,
+            .samples = 1,
             .value = m.value,
         });
     }
@@ -85,7 +88,13 @@ pub const Sampler = struct {
 
     fn hash(m: metric.Metric) u64 {
         // TODO(remy): tags
-        return fnv1a.hash(m.name);
+        var h = fnv1a.init();
+        h.update(m.name);
+        var it = m.tags.iterator();
+        while (it.next()) |tag| {
+            h.update(tag);
+        }
+        return h.final();
     }
 };
 
@@ -173,6 +182,7 @@ test "sampling counter" {
     if (iterator.next()) |kv| {
         const sample = kv.*.value;
         assert(sample.value == 50.0);
+        assert(sample.samples == 1);
     }
 
     m.value = 20;
@@ -182,7 +192,8 @@ test "sampling counter" {
     if (iterator.next()) |kv| {
         const sample = kv.*.value;
         assert(sample.value == 70.0);
+        assert(sample.samples == 2);
     }
- 
+
     Sampler.destroy(sampler);
 }

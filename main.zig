@@ -72,8 +72,6 @@ pub fn main() !void {
                     try Sampler.sample(sampler, metrics.span()[i]);
                     i += 1;
                 }
-
-
             } else |err| {
                 warn("can't parse packet: {}\n", .{err});
                 warn("packet: {}\n", .{node.data.payload});

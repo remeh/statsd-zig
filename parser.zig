@@ -130,7 +130,9 @@ test "split_name_and_value" {
 test "parse_metric" {
     const packet = "hello:5.0|c|#tags:hello";
 
-    var m = try Parser.parse_metric(packet);
+    var m = try Parser.parse_metric(std.testing.allocator, packet);
     assert(std.mem.eql(u8, m.name, "hello"));
     assert(m.value == 5.0);
+
+    m.tags.deinit();
 }
