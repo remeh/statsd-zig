@@ -35,7 +35,6 @@ pub fn listener(context: *ThreadContext) !void {
         if (rlen == 0) {
             continue;
         }
-
         if (context.b.isEmpty()) {
             // no more pre-allocated buffers available, this packet will be dropped.
             continue;

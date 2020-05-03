@@ -13,6 +13,9 @@ const Parser = @import("parser.zig").Parser;
 const Sampler = @import("sampler.zig").Sampler;
 const MeasureAllocator = @import("measure_allocator.zig").MeasureAllocator;
 
+/// flush_frequency represents how often we flush the sampler (in ms).
+pub const flush_frequency = 15000;
+
 pub const ThreadContext = struct {
 // packets read from the network waiting to be processed
     q: std.atomic.Queue(Packet),
@@ -59,6 +62,8 @@ pub fn main() !void {
 
     var measure_allocator = MeasureAllocator().init(&arena.allocator);
 
+    var nextFlush = std.time.milliTimestamp() + flush_frequency;
+
     // pipeline mainloop
     while (true) {
         while (!tx.q.isEmpty()) {
@@ -86,7 +91,15 @@ pub fn main() !void {
             arena.deinit();
             arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
             measure_allocator.allocated = 0;
+        }
+
+        if (std.time.milliTimestamp() > nextFlush) {
+            warn("flush\n", .{});
             Sampler.dump(sampler);
+            Sampler.flush(sampler) catch |err| {
+                warn("can't flush: {}", .{err});
+            };
+            nextFlush = std.time.milliTimestamp() + flush_frequency;
         }
     }
 }

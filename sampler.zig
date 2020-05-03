@@ -6,8 +6,9 @@ const assert = @import("std").debug.assert;
 
 const metric = @import("metric.zig");
 const Parser = @import("parser.zig").Parser; // used in tests
+const Forwarder = @import("forwarder.zig").Forwarder;
 
-const Sample = struct {
+pub const Sample = struct {
     metric_name: []u8,
     metric_type: u8,
     samples: u64,
@@ -17,11 +18,13 @@ const Sample = struct {
 pub const Sampler = struct {
     map: std.AutoHashMap(u64, Sample),
     allocator: *std.mem.Allocator,
+    mutex: std.Mutex,
 
     pub fn init(allocator: *std.mem.Allocator) !*Sampler {
         var rv = try allocator.create(Sampler);
         rv.map = std.AutoHashMap(u64, Sample).init(allocator);
         rv.allocator = allocator;
+        rv.mutex = std.Mutex.init();
         return rv;
     }
 
@@ -44,19 +47,23 @@ pub const Sampler = struct {
                     newSample.value += m.value;
                 }
             }
+            var held = self.mutex.acquire();
             _ = try self.map.put(h, newSample);
+            held.release();
             return;
         }
 
         // not existing, put it in the sampler
         var name = try self.allocator.alloc(u8, m.name.len);
         std.mem.copy(u8, name, m.name);
+        var held = self.mutex.acquire();
         _ = try self.map.put(h, Sample{
             .metric_name = name,
             .metric_type = m.type,
             .samples = 1,
             .value = m.value,
         });
+        held.release();
     }
 
     pub fn size(self: *Sampler) usize {
@@ -65,6 +72,13 @@ pub const Sampler = struct {
 
     pub fn reset(self: *Sampler) void {
         self.map.clear();
+    }
+
+    pub fn flush(self: *Sampler) !void {
+        var held = self.mutex.acquire();
+        try Forwarder.flush(self.map);
+        self.map = std.AutoHashMap(u64, Sample).init(self.allocator);
+        held.release();
     }
 
     /// destroy frees all the memory used by the Sampler and the instance itself.
@@ -76,6 +90,7 @@ pub const Sampler = struct {
         }
         self.map.deinit();
         self.allocator.destroy(self);
+        self.mutex.deinit();
     }
 
     // TODO(remy): debug method, remove?
