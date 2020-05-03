@@ -5,6 +5,7 @@ const fnv1a = std.hash.Fnv1a_64;
 const assert = @import("std").debug.assert;
 
 const metric = @import("metric.zig");
+const Parser = @import("parser.zig").Parser; // used in tests
 
 const Sample = struct {
     metric_name: []u8,
@@ -87,7 +88,6 @@ pub const Sampler = struct {
     }
 
     fn hash(m: metric.Metric) u64 {
-        // TODO(remy): tags
         var h = fnv1a.init();
         h.update(m.name);
         var i: usize = 0;
@@ -101,11 +101,12 @@ pub const Sampler = struct {
 
 test "sampling hashing" {
     var sampler = try Sampler.init(std.testing.allocator);
+    var tags = try Parser.parse_tags(std.testing.allocator, "#my:tag,second:tag");
     var m = metric.Metric{
         .name = "this.is.my.metric",
         .value = 50.0,
         .type = metric.MetricTypeCounter,
-        .tags = undefined,
+        .tags = tags,
     };
 
     try Sampler.sample(sampler, m);
@@ -118,7 +119,7 @@ test "sampling hashing" {
         .name = "this.is.my.metric",
         .value = 25.0,
         .type = metric.MetricTypeCounter,
-        .tags = undefined,
+        .tags = tags,
     };
 
     try Sampler.sample(sampler, m2);
@@ -128,13 +129,23 @@ test "sampling hashing" {
         .name = "this.is.my.other.metric",
         .value = 25.0,
         .type = metric.MetricTypeCounter,
-        .tags = undefined,
+        .tags = tags,
     };
 
     try Sampler.sample(sampler, m3);
     assert(Sampler.size(sampler) == 2);
 
+    var other_tags = try Parser.parse_tags(std.testing.allocator, "#my:tag,second:tag,and:other");
+    var m4 = metric.Metric{ // different because it has other tags
+        .name = "this.is.my.other.metric",
+        .value = 25.0,
+        .type = metric.MetricTypeCounter,
+        .tags = tags,
+    };
+
     Sampler.destroy(sampler);
+    tags.deinit();
+    other_tags.deinit();
 }
 
 test "sampling gauge" {

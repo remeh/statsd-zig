@@ -146,13 +146,15 @@ test "parse_metric" {
 }
 
 test "parse_tags" {
-    const tags: []const u8 = "#my:tag,dev:env,z:value";
+    const tags: []const u8 = "#my:tag,dev:env,z:value,aaa:aba,aaa:aaa1";
     var rv = try Parser.parse_tags(std.testing.allocator, tags);
 
-    assert(rv.span().len == 3);
-    assert(std.mem.eql(u8, rv.span()[0], "dev:env"));
-    assert(std.mem.eql(u8, rv.span()[1], "my:tag"));
-    assert(std.mem.eql(u8, rv.span()[2], "z:value"));
+    assert(rv.span().len == 5);
+    assert(std.mem.eql(u8, rv.span()[0], "aaa:aaa1"));
+    assert(std.mem.eql(u8, rv.span()[1], "aaa:aba"));
+    assert(std.mem.eql(u8, rv.span()[2], "dev:env"));
+    assert(std.mem.eql(u8, rv.span()[3], "my:tag"));
+    assert(std.mem.eql(u8, rv.span()[4], "z:value"));
 
     rv.deinit();
 }
