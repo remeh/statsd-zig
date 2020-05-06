@@ -29,7 +29,9 @@ pub const Parser = struct {
             } else if (idx == 1) {
                 if (std.fmt.parseFloat(f32, part.?)) |value| {
                     rv.value = value;
-                } else |err| { return ParsingError.MalformedNameValue; }
+                } else |err| {
+                    return ParsingError.MalformedNameValue;
+                }
                 idx += 1;
             } else {
                 return ParsingError.MalformedNameValue;
@@ -61,7 +63,7 @@ pub const Parser = struct {
         const part: ?[]const u8 = iterator.next();
         var idx: u8 = 0;
 
-        var rv: metric.Metric = metric.Metric {
+        var rv: metric.Metric = metric.Metric{
             .name = undefined,
             .value = 0.0,
             .type = metric.MetricTypeUnknown,
@@ -88,11 +90,13 @@ pub const Parser = struct {
                     // metric tags
                     if (parse_tags(allocator, part.?)) |tags| {
                         rv.tags = tags;
-                    } else |err| { return ParsingError.MalformedTags; }
+                    } else |err| {
+                        return ParsingError.MalformedTags;
+                    }
                 },
                 else => {
                     return ParsingError.MalformedPacket;
-                }
+                },
             }
             idx += 1;
             part = iterator.next();
@@ -108,7 +112,9 @@ pub const Parser = struct {
     pub fn parse_tags(allocator: *std.mem.Allocator, buffer: []const u8) anyerror!metric.Tags {
         var rv = metric.Tags.init(allocator);
         errdefer rv.deinit();
-        if (buffer[0] != '#') { return ParsingError.MalformedTags; }
+        if (buffer[0] != '#') {
+            return ParsingError.MalformedTags;
+        }
         var iterator = std.mem.split(buffer[1..buffer.len], ",");
         const part: ?[]const u8 = iterator.next();
         while (part != null) {

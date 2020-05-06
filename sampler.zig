@@ -32,7 +32,7 @@ pub const Sampler = struct {
         const h = Sampler.hash(m);
         var k = self.map.getValue(h);
         if (k) |s| {
-            var newSample = Sample {
+            var newSample = Sample{
                 .metric_name = s.metric_name,
                 .metric_type = s.metric_type,
                 .samples = s.samples + 1,
@@ -45,7 +45,7 @@ pub const Sampler = struct {
                 // MetricTypeCounter & MetricTypeUnknown
                 else => {
                     newSample.value += m.value;
-                }
+                },
             }
             var held = self.mutex.acquire();
             _ = try self.map.put(h, newSample);
@@ -98,7 +98,7 @@ pub const Sampler = struct {
         var it = self.map.iterator();
         while (it.next()) |kv| {
             const s = kv.*.value;
-            warn("{d}: {} ({c}): {d}\n", .{kv.*.key, s.metric_name, s.metric_type, s.value});
+            warn("{d}: {} ({c}): {d}\n", .{ kv.*.key, s.metric_name, s.metric_type, s.value });
         }
     }
 

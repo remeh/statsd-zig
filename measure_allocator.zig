@@ -44,4 +44,3 @@ pub fn MeasureAllocator() type {
         }
     };
 }
-

@@ -5,8 +5,7 @@ const os = std.os;
 const ThreadContext = @import("main.zig").ThreadContext;
 
 pub const Packet = struct {
-    payload: []u8,
-    len: usize
+    payload: []u8, len: usize
 };
 
 fn open_socket() !i32 {

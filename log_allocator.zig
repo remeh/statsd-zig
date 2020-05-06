@@ -47,4 +47,3 @@ pub fn LogAllocator() type {
         }
     };
 }
-

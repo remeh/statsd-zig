@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub const MetricTypeGauge:   u8 = 'g';
+pub const MetricTypeGauge: u8 = 'g';
 pub const MetricTypeCounter: u8 = 'c';
 pub const MetricTypeUnknown: u8 = 0;
 

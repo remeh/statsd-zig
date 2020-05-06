@@ -10,6 +10,5 @@ pub const Forwarder = struct {
         samples.deinit();
     }
 
-    fn writeSample(sample: Sample) []u8 {
-    }
+    fn writeSample(sample: Sample) []u8 {}
 };
