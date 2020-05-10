@@ -76,7 +76,7 @@ pub const Sampler = struct {
 
     pub fn flush(self: *Sampler) !void {
         var held = self.mutex.acquire();
-        try Forwarder.flush(self.map);
+        try Forwarder.flush(self.allocator, self.map);
         self.map = std.AutoHashMap(u64, Sample).init(self.allocator);
         held.release();
     }
