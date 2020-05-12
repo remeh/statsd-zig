@@ -1,5 +1,7 @@
 const std = @import("std");
-const c = @cImport(@cInclude("curl/curl.h"));
+const c = @cImport(
+    @cInclude("curl/curl.h");
+});
 
 const Sample = @import("sampler.zig").Sample;
 const metric = @import("metric.zig");
@@ -33,8 +35,7 @@ pub const Forwarder = struct {
         try buf.resize(buf.len() + 2);
         try buf.appendSlice("]}");
 
-        send_http_request(&buf);
-        std.debug.warn("{}", .{buf.span()});
+        send_http_request(buf);
     }
 
     fn write_sample(allocator: *std.mem.Allocator, buf: *std.ArrayListSentineled(u8, 0), sample: Sample) !void {
@@ -82,24 +83,32 @@ pub const Forwarder = struct {
         try buf.*.appendSlice(json);
     }
 
-    fn send_http_request(buf: *std.ArrayListSentineled(u8, 0)) void {
+    fn send_http_request(buf: std.ArrayListSentineled(u8, 0)) void {
         _ = c.curl_global_init(c.CURL_GLOBAL_ALL);
 
-        var curl: ?*c.CURL = undefined;
+        var curl: ?*c.CURL = null;
         var res: c.CURLcode = undefined;
         var headers: [*c]c.curl_slist = null;
 
         curl = c.curl_easy_init();
         if (curl != null) {
-            _ = c.curl_easy_setopt(curl, @intToEnum(c.CURLoption, c.CURLOPT_URL), "http://localhost:8080/?apikey=hello");
-            _ = c.curl_easy_setopt(curl, @intToEnum(c.CURLoption, c.CURLOPT_POSTFIELDS), @ptrCast([*c]u8, buf.*.span()));
-            _ = c.curl_slist_append(headers, "Content-Type: application/json");
-            _ = c.curl_slist_append(headers, "Dd-Api-Key: hello");
-            _ = c.curl_easy_setopt(curl, @intToEnum(c.CURLoption, c.CURLOPT_HTTPHEADER), headers);
+            // url
+            _ = c.curl_easy_setopt(curl, c.CURLoption.CURLOPT_URL, "http://localhost:8080/?apikey=hello");
 
+            // body
+            // std.debug.warn("zig: {}\n", .{buf.span()});
+            // _ = std.c.printf("c: %s\n", @ptrCast([*:0]const u8, buf.span()));
+            _ = c.curl_easy_setopt(curl, c.CURLoption.CURLOPT_POSTFIELDS, @ptrCast([*:0]const u8, buf.span()));
+
+            // http headers
+            headers = c.curl_slist_append(headers, "Content-Type: application/json");
+            headers = c.curl_slist_append(headers, "Dd-Api-Key: hello");
+            _ = c.curl_easy_setopt(curl, c.CURLoption.CURLOPT_HTTPHEADER, headers);
+
+            // perform the call
             res = c.curl_easy_perform(curl);
             if (@enumToInt(res) != @bitCast(c_uint, c.CURLE_OK)) {
-                _ = c.fprintf(c.stderr, "curl_easy_perform() failed: %s\n", c.curl_easy_strerror(res));
+                _ = c.printf("curl_easy_perform() failed: %s\n", c.curl_easy_strerror(res));
             }
 
             c.curl_easy_cleanup(curl);

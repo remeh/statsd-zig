@@ -14,7 +14,7 @@ pub const ParsingError = error{
 pub const Parser = struct {
     fn split_name_and_value(string: []const u8) ParsingError!metric.Metric {
         var iterator = std.mem.split(string, ":");
-        const part: ?[]const u8 = iterator.next();
+        var part: ?[]const u8 = iterator.next();
         var rv: metric.Metric = metric.Metric{
             .name = "",
             .value = 0.0,
@@ -44,7 +44,7 @@ pub const Parser = struct {
 
     pub fn parse_packet(allocator: *std.mem.Allocator, metric_packet: Packet) !std.ArrayList(metric.Metric) {
         var iterator = std.mem.split(metric_packet.payload[0..metric_packet.len], "\n");
-        const part: ?[]const u8 = iterator.next();
+        var part: ?[]const u8 = iterator.next();
 
         var rv = std.ArrayList(metric.Metric).init(allocator);
         errdefer rv.deinit();
@@ -60,7 +60,7 @@ pub const Parser = struct {
 
     pub fn parse_metric(allocator: *std.mem.Allocator, packet: []const u8) !metric.Metric {
         var iterator = std.mem.split(packet, "|");
-        const part: ?[]const u8 = iterator.next();
+        var part: ?[]const u8 = iterator.next();
         var idx: u8 = 0;
 
         var rv: metric.Metric = metric.Metric{
@@ -116,7 +116,7 @@ pub const Parser = struct {
             return ParsingError.MalformedTags;
         }
         var iterator = std.mem.split(buffer[1..buffer.len], ",");
-        const part: ?[]const u8 = iterator.next();
+        var part: ?[]const u8 = iterator.next();
         while (part != null) {
             _ = try rv.append(part.?);
             part = iterator.next();
