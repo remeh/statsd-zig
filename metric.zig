@@ -12,6 +12,4 @@ pub const Metric = struct {
     type: u8,
     // 64 tags maximum for nw
     tags: Tags,
-
-    // TODO(remy): init / destroy?
 };

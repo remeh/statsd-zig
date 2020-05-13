@@ -2,6 +2,7 @@ const std = @import("std");
 const c = @cImport(@cInclude("curl/curl.h"));
 
 const Sample = @import("sampler.zig").Sample;
+const Config = @import("config.zig").Config;
 const metric = @import("metric.zig");
 
 const endpoint = "https://agent.datadoghq.com/api/v1/series";
@@ -9,7 +10,7 @@ const endpoint = "https://agent.datadoghq.com/api/v1/series";
 pub const Forwarder = struct {
     /// flush is responsible for sending all the given metrics to some HTTP route.
     /// It owns the list of metrics and is responsible for freeing its memory.
-    pub fn flush(allocator: *std.mem.Allocator, samples: std.AutoHashMap(u64, Sample)) !void {
+    pub fn flush(allocator: *std.mem.Allocator, config: Config, samples: std.AutoHashMap(u64, Sample)) !void {
         var buf = try std.ArrayListSentineled(u8, 0).initSize(allocator, 0);
         defer buf.deinit();
         defer samples.deinit();
@@ -26,16 +27,16 @@ pub const Forwarder = struct {
                 try buf.append(',');
             }
             first = false;
-            try write_sample(allocator, &buf, kv.?.value);
+            try write_sample(allocator, config, &buf, kv.?.value);
             kv = iterator.next();
         }
 
         try buf.appendSlice("]}");
 
-        try send_http_request(allocator, buf);
+        try send_http_request(allocator, config, buf);
     }
 
-    fn write_sample(allocator: *std.mem.Allocator, buf: *std.ArrayListSentineled(u8, 0), sample: Sample) !void {
+    fn write_sample(allocator: *std.mem.Allocator, config: Config, buf: *std.ArrayListSentineled(u8, 0), sample: Sample) !void {
         // {
         //   "metric": "system.mem.used",
         //   "points": [
@@ -66,9 +67,10 @@ pub const Forwarder = struct {
         // build the json
         const json = try std.fmt.allocPrint(
             allocator,
-            "{{\"metric\":\"{}\",\"host\":\"hooch\",\"type\":\"{}\",\"points\":[[{},{d}]],\"interval\":0}}",
+            "{{\"metric\":\"{}\",\"host\":\"{}\",\"type\":\"{}\",\"points\":[[{},{d}]],\"interval\":0}}",
             .{
                 sample.metric_name,
+                config.hostname,
                 t,
                 std.time.milliTimestamp() / 1000,
                 sample.value,
@@ -80,32 +82,25 @@ pub const Forwarder = struct {
         try buf.*.appendSlice(json);
     }
 
-    fn send_http_request(allocator: *std.mem.Allocator, buf: std.ArrayListSentineled(u8, 0)) !void {
+    fn send_http_request(allocator: *std.mem.Allocator, config: Config, buf: std.ArrayListSentineled(u8, 0)) !void {
         _ = c.curl_global_init(c.CURL_GLOBAL_ALL);
 
         var curl: ?*c.CURL = null;
         var res: c.CURLcode = undefined;
         var headers: [*c]c.curl_slist = null;
 
-        // apikey
-        var apikey = std.os.getenv("API_KEY");
-        if (apikey == null) { // TODO(remy): do this somewhere else.
-            std.debug.warn("Not flushing: API_KEY should be set!\n", .{});
-            return;
-        }
-
         // url
         var url = try std.ArrayListSentineled(u8, 0).initSize(allocator, 0);
         defer url.deinit();
         try url.appendSlice(endpoint);
         try url.appendSlice("?api_key=");
-        try url.appendSlice(apikey.?);
+        try url.appendSlice(config.apikey);
 
         // apikeyHeader
         var apikeyHeader = try std.ArrayListSentineled(u8, 0).initSize(allocator, 0);
         defer apikeyHeader.deinit();
         try apikeyHeader.appendSlice("Dd-Api-Key: ");
-        try apikeyHeader.appendSlice(apikey.?);
+        try apikeyHeader.appendSlice(config.apikey);
 
         curl = c.curl_easy_init();
         if (curl != null) {

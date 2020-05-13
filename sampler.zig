@@ -5,6 +5,7 @@ const fnv1a = std.hash.Fnv1a_64;
 const assert = @import("std").debug.assert;
 
 const metric = @import("metric.zig");
+const Config = @import("config.zig").Config;
 const Parser = @import("parser.zig").Parser; // used in tests
 const Forwarder = @import("forwarder.zig").Forwarder;
 
@@ -74,9 +75,9 @@ pub const Sampler = struct {
         self.map.clear();
     }
 
-    pub fn flush(self: *Sampler) !void {
+    pub fn flush(self: *Sampler, config: Config) !void {
         var held = self.mutex.acquire();
-        try Forwarder.flush(self.allocator, self.map);
+        try Forwarder.flush(self.allocator, config, self.map);
         self.map = std.AutoHashMap(u64, Sample).init(self.allocator);
         held.release();
     }

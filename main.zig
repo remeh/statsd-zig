@@ -9,6 +9,7 @@ const listener = @import("listener.zig").listener;
 const Packet = @import("listener.zig").Packet;
 
 const Metric = @import("metric.zig").Metric;
+const Config = @import("config.zig").Config;
 const Parser = @import("parser.zig").Parser;
 const Sampler = @import("sampler.zig").Sampler;
 const MeasureAllocator = @import("measure_allocator.zig").MeasureAllocator;
@@ -49,6 +50,9 @@ pub fn main() !void {
         .q = queue,
         .b = packet_buffers,
     };
+
+    // read config
+    var config = try Config.read();
 
     // create the sampler
     var sampler = try Sampler.init(std.heap.page_allocator);
@@ -95,7 +99,7 @@ pub fn main() !void {
 
         if (std.time.milliTimestamp() > nextFlush) {
             // Sampler.dump(sampler);
-            Sampler.flush(sampler) catch |err| {
+            Sampler.flush(sampler, config) catch |err| {
                 warn("can't flush: {}", .{err});
             };
             nextFlush = std.time.milliTimestamp() + flush_frequency;
