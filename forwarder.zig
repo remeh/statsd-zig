@@ -1,10 +1,10 @@
 const std = @import("std");
-const c = @cImport(
-    @cInclude("curl/curl.h");
-});
+const c = @cImport(@cInclude("curl/curl.h"));
 
 const Sample = @import("sampler.zig").Sample;
 const metric = @import("metric.zig");
+
+const endpoint = "https://agent.datadoghq.com/api/v1/series";
 
 pub const Forwarder = struct {
     /// flush is responsible for sending all the given metrics to some HTTP route.
@@ -14,7 +14,6 @@ pub const Forwarder = struct {
         defer buf.deinit();
         defer samples.deinit();
 
-        try buf.resize(11);
         try buf.appendSlice("{\"series\":[");
 
         // append every sample
@@ -24,7 +23,6 @@ pub const Forwarder = struct {
         var kv = iterator.next();
         while (kv != null) {
             if (!first) {
-                try buf.resize(buf.len() + 1);
                 try buf.append(',');
             }
             first = false;
@@ -32,10 +30,9 @@ pub const Forwarder = struct {
             kv = iterator.next();
         }
 
-        try buf.resize(buf.len() + 2);
         try buf.appendSlice("]}");
 
-        send_http_request(buf);
+        try send_http_request(allocator, buf);
     }
 
     fn write_sample(allocator: *std.mem.Allocator, buf: *std.ArrayListSentineled(u8, 0), sample: Sample) !void {
@@ -83,26 +80,46 @@ pub const Forwarder = struct {
         try buf.*.appendSlice(json);
     }
 
-    fn send_http_request(buf: std.ArrayListSentineled(u8, 0)) void {
+    fn send_http_request(allocator: *std.mem.Allocator, buf: std.ArrayListSentineled(u8, 0)) !void {
         _ = c.curl_global_init(c.CURL_GLOBAL_ALL);
 
         var curl: ?*c.CURL = null;
         var res: c.CURLcode = undefined;
         var headers: [*c]c.curl_slist = null;
 
+        // apikey
+        var apikey = std.os.getenv("API_KEY");
+        if (apikey == null) { // TODO(remy): do this somewhere else.
+            std.debug.warn("Not flushing: API_KEY should be set!\n", .{});
+            return;
+        }
+
+        // url
+        var url = try std.ArrayListSentineled(u8, 0).initSize(allocator, 0);
+        defer url.deinit();
+        try url.appendSlice(endpoint);
+        try url.appendSlice("?api_key=");
+        try url.appendSlice(apikey.?);
+
+        // apikeyHeader
+        var apikeyHeader = try std.ArrayListSentineled(u8, 0).initSize(allocator, 0);
+        defer apikeyHeader.deinit();
+        try apikeyHeader.appendSlice("Dd-Api-Key: ");
+        try apikeyHeader.appendSlice(apikey.?);
+
         curl = c.curl_easy_init();
         if (curl != null) {
             // url
-            _ = c.curl_easy_setopt(curl, c.CURLoption.CURLOPT_URL, "http://localhost:8080/?apikey=hello");
+            _ = c.curl_easy_setopt(curl, c.CURLoption.CURLOPT_URL, @ptrCast([*:0]const u8, url.span()));
 
             // body
-            // std.debug.warn("zig: {}\n", .{buf.span()});
-            // _ = std.c.printf("c: %s\n", @ptrCast([*:0]const u8, buf.span()));
+            _ = c.curl_easy_setopt(curl, c.CURLoption.CURLOPT_POSTFIELDSIZE, buf.len());
+            _ = c.curl_easy_setopt(curl, c.CURLoption.CURLOPT_POST, @as(c_int, 1));
             _ = c.curl_easy_setopt(curl, c.CURLoption.CURLOPT_POSTFIELDS, @ptrCast([*:0]const u8, buf.span()));
 
             // http headers
             headers = c.curl_slist_append(headers, "Content-Type: application/json");
-            headers = c.curl_slist_append(headers, "Dd-Api-Key: hello");
+            headers = c.curl_slist_append(headers, @ptrCast([*:0]const u8, apikeyHeader.span()));
             _ = c.curl_easy_setopt(curl, c.CURLoption.CURLOPT_HTTPHEADER, headers);
 
             // perform the call
@@ -115,6 +132,6 @@ pub const Forwarder = struct {
         }
 
         c.curl_global_cleanup();
-        std.debug.warn("http call done", .{});
+        std.debug.warn("http flush done, request payload size: {}\n", .{buf.len()});
     }
 };

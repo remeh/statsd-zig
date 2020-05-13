@@ -94,8 +94,7 @@ pub fn main() !void {
         }
 
         if (std.time.milliTimestamp() > nextFlush) {
-            warn("flush\n", .{});
-            Sampler.dump(sampler);
+            // Sampler.dump(sampler);
             Sampler.flush(sampler) catch |err| {
                 warn("can't flush: {}", .{err});
             };
