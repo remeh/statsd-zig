@@ -90,22 +90,17 @@ pub const Forwarder = struct {
         var headers: [*c]c.curl_slist = null;
 
         // url
-        var url = try std.ArrayListSentineled(u8, 0).initSize(allocator, 0);
-        defer url.deinit();
-        try url.appendSlice(endpoint);
-        try url.appendSlice("?api_key=");
-        try url.appendSlice(config.apikey);
+        var url = try std.fmt.allocPrint0(allocator, "{}?api_key={}", .{ endpoint, config.apikey });
+        defer allocator.free(url);
 
         // apikeyHeader
-        var apikeyHeader = try std.ArrayListSentineled(u8, 0).initSize(allocator, 0);
-        defer apikeyHeader.deinit();
-        try apikeyHeader.appendSlice("Dd-Api-Key: ");
-        try apikeyHeader.appendSlice(config.apikey);
+        var apikeyHeader = try std.fmt.allocPrint0(allocator, "Dd-Api-Key: {}", .{config.apikey});
+        defer allocator.free(apikeyHeader);
 
         curl = c.curl_easy_init();
         if (curl != null) {
             // url
-            _ = c.curl_easy_setopt(curl, c.CURLoption.CURLOPT_URL, @ptrCast([*:0]const u8, url.span()));
+            _ = c.curl_easy_setopt(curl, c.CURLoption.CURLOPT_URL, @ptrCast([*:0]const u8, url));
 
             // body
             _ = c.curl_easy_setopt(curl, c.CURLoption.CURLOPT_POSTFIELDSIZE, buf.len());
@@ -114,7 +109,7 @@ pub const Forwarder = struct {
 
             // http headers
             headers = c.curl_slist_append(headers, "Content-Type: application/json");
-            headers = c.curl_slist_append(headers, @ptrCast([*:0]const u8, apikeyHeader.span()));
+            headers = c.curl_slist_append(headers, @ptrCast([*:0]const u8, apikeyHeader));
             _ = c.curl_easy_setopt(curl, c.CURLoption.CURLOPT_HTTPHEADER, headers);
 
             // perform the call
