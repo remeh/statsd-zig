@@ -118,6 +118,7 @@ pub const Forwarder = struct {
                 _ = c.printf("curl_easy_perform() failed: %s\n", c.curl_easy_strerror(res));
             }
 
+            c.curl_slist_free_all(headers);
             c.curl_easy_cleanup(curl);
         }
 
