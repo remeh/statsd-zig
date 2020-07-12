@@ -46,7 +46,7 @@ pub const Forwarder = struct {
         //     ]
         //   ],
         //   "tags": [],
-        //   "host": "hooch",
+        //   "host": "hostname",
         //   "type": "gauge",
         //   "interval": 0,
         //   "source_type_name": "System"

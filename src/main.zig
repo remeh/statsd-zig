@@ -78,7 +78,7 @@ pub fn main() !void {
                 // sampling
                 i = 0;
                 while (i < metrics.span().len) {
-                    try Sampler.sample(sampler, metrics.span()[i]);
+                    try sampler.sample(metrics.span()[i]);
                     i += 1;
                 }
             } else |err| {
@@ -98,8 +98,8 @@ pub fn main() !void {
         }
 
         if (std.time.milliTimestamp() > nextFlush) {
-            // Sampler.dump(sampler);
-            Sampler.flush(sampler, config) catch |err| {
+            // sampler.dump();
+            sampler.flush(config) catch |err| {
                 warn("can't flush: {}", .{err});
             };
             nextFlush = std.time.milliTimestamp() + flush_frequency;
