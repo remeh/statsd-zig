@@ -77,6 +77,7 @@ pub const Sampler = struct {
 
     pub fn flush(self: *Sampler, config: Config) !void {
         var held = self.mutex.acquire();
+        // TODO(remy): do not flush if no metrics have been received
         try Forwarder.flush(self.allocator, config, &self.map);
         self.map = std.AutoHashMap(u64, Sample).init(self.allocator);
         held.release();
