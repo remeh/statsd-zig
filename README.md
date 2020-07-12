@@ -17,7 +17,7 @@ standard library).
 
 The pattern I've used let me free all the memory allocated for metrics processing
 once it has reached a certain amount, meaning that the total memory used is
-capped to a configurable maximum (see main.zig for the maximum value).
+capped to a configurable maximum (set `MAX_MEM_MB`, default value 256).
 
 # Author
 

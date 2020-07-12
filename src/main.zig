@@ -91,7 +91,7 @@ pub fn main() !void {
         }
 
         // TODO(remy): add a knob here
-        if (measure_allocator.allocated > 256 * 1024 * 1024) {
+        if (measure_allocator.allocated > config.max_mem_mb * 1024 * 1024) {
             arena.deinit();
             arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
             measure_allocator.allocated = 0;

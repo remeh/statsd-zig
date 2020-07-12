@@ -3,11 +3,13 @@ const std = @import("std");
 pub const ConfigError = error{
     MissingApikey,
     MissingHostname,
+    MalformedMaxMemMB,
 };
 
 pub const Config = struct {
     hostname: []const u8,
     apikey: []const u8,
+    max_mem_mb: u32,
 
     pub fn read() ConfigError!Config {
         var apikey = std.os.getenv("APIKEY");
@@ -22,9 +24,18 @@ pub const Config = struct {
             return ConfigError.MissingHostname;
         }
 
+        var max_mem_value: u32 = 256;
+        if (std.os.getenv("MAX_MEM_MB")) |value| {
+            var parsed_value = std.fmt.parseInt(u32, value, 10) catch |err| {
+                return ConfigError.MalformedMaxMemMB;
+            };
+            max_mem_value = parsed_value;
+        }
+
         return Config{
             .apikey = apikey.?,
             .hostname = hostname.?,
+            .max_mem_mb = max_mem_value,
         };
     }
 };
