@@ -1,3 +1,2 @@
-main
-main.o
 zig-cache
+statsd
