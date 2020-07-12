@@ -14,32 +14,36 @@ pub fn MeasureAllocator() type {
         pub fn init(parent_allocator: *Allocator) Self {
             return Self{
                 .allocator = Allocator{
-                    .reallocFn = realloc,
-                    .shrinkFn = shrink,
+                    .allocFn = alloc,
+                    .resizeFn = resize,
                 },
                 .parent_allocator = parent_allocator,
                 .allocated = 0,
             };
         }
 
-        fn realloc(allocator: *Allocator, old_mem: []u8, old_align: u29, new_size: usize, new_align: u29) ![]u8 {
+        fn alloc(allocator: *Allocator, len: usize, ptr_align: u29, len_align: u29) std.mem.Allocator.Error![]u8 {
             const self = @fieldParentPtr(Self, "allocator", allocator);
-            const result = self.parent_allocator.reallocFn(self.parent_allocator, old_mem, old_align, new_size, new_align);
+            const result = self.parent_allocator.allocFn(self.parent_allocator, len, ptr_align, len_align);
             if (result) |buff| {
-                if (old_mem.len == 0) {
-                    self.allocated += new_size - old_mem.len;
-                } else {
-                    self.allocated += new_size;
-                }
+                self.allocated += len;
             } else |err| {
                 return err;
             }
             return result;
         }
 
-        fn shrink(allocator: *Allocator, old_mem: []u8, old_align: u29, new_size: usize, new_align: u29) []u8 {
+        fn resize(allocator: *Allocator, buf: []u8, new_len: usize, len_align: u29) std.mem.Allocator.Error!usize {
             const self = @fieldParentPtr(Self, "allocator", allocator);
-            const result = self.parent_allocator.shrinkFn(self.parent_allocator, old_mem, old_align, new_size, new_align);
+            var old_len: usize = buf.len;
+            const result = self.parent_allocator.resizeFn(self.parent_allocator, buf, new_len, len_align);
+            if (result) |buff| {
+                if (old_len < new_len) {
+                    self.allocated += new_len - old_len;
+                }
+            } else |err| {
+                return err;
+            }
             return result;
         }
     };

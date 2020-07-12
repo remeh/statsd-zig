@@ -31,7 +31,7 @@ pub const Sampler = struct {
 
     pub fn sample(self: *Sampler, m: metric.Metric) !void {
         const h = Sampler.hash(m);
-        var k = self.map.getValue(h);
+        var k = self.map.get(h);
         if (k) |s| {
             var newSample = Sample{
                 .metric_name = s.metric_name,
@@ -77,7 +77,7 @@ pub const Sampler = struct {
 
     pub fn flush(self: *Sampler, config: Config) !void {
         var held = self.mutex.acquire();
-        try Forwarder.flush(self.allocator, config, self.map);
+        try Forwarder.flush(self.allocator, config, &self.map);
         self.map = std.AutoHashMap(u64, Sample).init(self.allocator);
         held.release();
     }

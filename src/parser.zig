@@ -123,12 +123,12 @@ pub const Parser = struct {
         }
 
         var tags = rv.span();
-        std.sort.insertionSort([]const u8, tags, lessThanTags);
+        std.sort.insertionSort([]const u8, tags, {}, lessThanTags);
 
         return rv;
     }
 
-    fn lessThanTags(l: []const u8, r: []const u8) bool {
+    fn lessThanTags(context: void, l: []const u8, r: []const u8) bool {
         return std.mem.lessThan(u8, l, r);
     }
 };

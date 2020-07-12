@@ -10,17 +10,17 @@ const endpoint = "https://agent.datadoghq.com/api/v1/series";
 pub const Forwarder = struct {
     /// flush is responsible for sending all the given metrics to some HTTP route.
     /// It owns the list of metrics and is responsible for freeing its memory.
-    pub fn flush(allocator: *std.mem.Allocator, config: Config, samples: std.AutoHashMap(u64, Sample)) !void {
+    pub fn flush(allocator: *std.mem.Allocator, config: Config, samples: *std.AutoHashMap(u64, Sample)) !void {
         var buf = try std.ArrayListSentineled(u8, 0).initSize(allocator, 0);
         defer buf.deinit();
-        defer samples.deinit();
+        defer samples.*.deinit();
 
         try buf.appendSlice("{\"series\":[");
 
         // append every sample
 
         var first: bool = true;
-        var iterator = samples.iterator();
+        var iterator = samples.*.iterator();
         var kv = iterator.next();
         while (kv != null) {
             if (!first) {
@@ -72,7 +72,7 @@ pub const Forwarder = struct {
                 sample.metric_name,
                 config.hostname,
                 t,
-                std.time.milliTimestamp() / 1000,
+                @divTrunc(std.time.milliTimestamp(), 1000),
                 sample.value,
             },
         );
