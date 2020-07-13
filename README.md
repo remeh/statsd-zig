@@ -1,6 +1,7 @@
 # statsd-zig
 
-Basic DogStatsD implementation supporting gauges and counters.
+Basic DogStatsD implementation supporting gauges and counters and sending these
+metrics to Datadog.
 
 ## Getting started
 
@@ -12,12 +13,11 @@ toolchain (>= zig master 2020-07-12)
 
 ## Memory usage
 
-Thanks to Zig not having a default memory allocator, I completely control every
-bytes of memory allocated in this daemon (even the memory allocated in the
-standard library).
+Thanks to Zig not having a default memory allocator, I control every byte of
+memory allocated in this daemon (even the memory allocated by the standard library).
 
 The pattern I've used let me free all the memory allocated for metrics processing
-once it has reached a certain amount, thus, that the total memory used is
+once it has reached a certain amount, thus, it let me have the total memory
 capped to a configurable maximum (set `MAX_MEM_MB`, default value 256).
 
 # Author
@@ -25,5 +25,7 @@ capped to a configurable maximum (set `MAX_MEM_MB`, default value 256).
 Rémy 'remeh' Mathieu
 
 # License
+
+This side-project is not endorsed in anyway by Datadog.
 
 MIT
