@@ -1,6 +1,6 @@
 # statsd-zig
 
-Basic DogStatsD implementation supporting gauges and counters and sending these
+Basic DogStatsD UDP server supporting gauges and counters and sending these
 metrics to Datadog.
 
 ## Getting started
@@ -26,6 +26,6 @@ Rémy 'remeh' Mathieu
 
 # License
 
-This side-project is not endorsed in anyway by Datadog.
+This side-project is not endorsed in any way by Datadog.
 
 MIT
