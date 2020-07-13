@@ -80,9 +80,9 @@ pub const Parser = struct {
                 },
                 1 => {
                     // metric type
-                    if (part.?[0] == 'c') {
+                    if (part.?[0] == metric.MetricTypeCounter) {
                         rv.type = metric.MetricTypeCounter;
-                    } else if (part.?[0] == 'g') {
+                    } else if (part.?[0] == metric.MetricTypeGauge) {
                         rv.type = metric.MetricTypeGauge;
                     }
                 },
