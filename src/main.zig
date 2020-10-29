@@ -66,7 +66,9 @@ pub fn main() !void {
 
     var measure_allocator = MeasureAllocator().init(&arena.allocator);
 
-    var nextFlush = std.time.milliTimestamp() + flush_frequency;
+    var next_flush = std.time.milliTimestamp() + flush_frequency;
+    var packets_parsed: u32 = 0;
+    var metrics_parsed: u32 = 0;
 
     // pipeline mainloop
     while (true) {
@@ -74,10 +76,11 @@ pub fn main() !void {
             var node = tx.q.get().?;
             // parse the packets
             if (Parser.parse_packet(&measure_allocator.allocator, node.data)) |metrics| {
-
+                packets_parsed += 1;
                 // sampling
                 i = 0;
                 while (i < metrics.span().len) {
+                    metrics_parsed += 1;
                     try sampler.sample(metrics.span()[i]);
                     i += 1;
                 }
@@ -97,12 +100,18 @@ pub fn main() !void {
             measure_allocator.allocated = 0;
         }
 
-        if (std.time.milliTimestamp() > nextFlush) {
+        if (std.time.milliTimestamp() > next_flush) {
             // sampler.dump();
             sampler.flush(config) catch |err| {
                 warn("can't flush: {}", .{err});
             };
-            nextFlush = std.time.milliTimestamp() + flush_frequency;
+
+            warn("packets parsed: {}/s\n", .{@divTrunc(packets_parsed, (flush_frequency / 1000))});
+            warn("metrics parsed: {}/s\n", .{@divTrunc(metrics_parsed, (flush_frequency / 1000))});
+            packets_parsed = 0;
+            metrics_parsed = 0;
+
+            next_flush = std.time.milliTimestamp() + flush_frequency;
         }
     }
 }

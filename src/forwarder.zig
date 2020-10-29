@@ -5,7 +5,8 @@ const Sample = @import("sampler.zig").Sample;
 const Config = @import("config.zig").Config;
 const metric = @import("metric.zig");
 
-const endpoint = "https://agent.datadoghq.com/api/v1/series";
+//const endpoint = "https://agent.datadoghq.com/api/v1/series";
+const endpoint = "http://localhost:8001";
 
 pub const Forwarder = struct {
     /// flush is responsible for sending all the given metrics to some HTTP route.

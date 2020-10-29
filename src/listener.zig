@@ -27,6 +27,9 @@ pub fn listener(context: *ThreadContext) !void {
     var array: [8192]u8 = undefined;
     var buf: []u8 = &array;
 
+    var drops: i64 = 0;
+    var last_drop_message = std.time.milliTimestamp();
+
     while (true) {
         const rlen = os.recvfrom(sockfd, buf, 0, null, null) catch {
             continue;
@@ -35,6 +38,7 @@ pub fn listener(context: *ThreadContext) !void {
             continue;
         }
         if (context.b.isEmpty()) {
+            drops += 1;
             // no more pre-allocated buffers available, this packet will be dropped.
             continue;
         }
@@ -46,5 +50,12 @@ pub fn listener(context: *ThreadContext) !void {
         node.data.len = rlen;
         // send it for processing
         context.q.put(node);
+
+        const tmp = std.time.milliTimestamp() - last_drop_message;
+        if (tmp > 10000) {
+            last_drop_message = std.time.milliTimestamp();
+            warn("drops: {}/s\n", .{@divTrunc(drops, @divTrunc(tmp, 1000))});
+            drops = 0;
+        }
     }
 }
