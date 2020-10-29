@@ -22,9 +22,9 @@ pub fn MeasureAllocator() type {
             };
         }
 
-        fn alloc(allocator: *Allocator, len: usize, ptr_align: u29, len_align: u29) std.mem.Allocator.Error![]u8 {
+        fn alloc(allocator: *Allocator, len: usize, ptr_align: u29, len_align: u29, ret_len: usize) std.mem.Allocator.Error![]u8 {
             const self = @fieldParentPtr(Self, "allocator", allocator);
-            const result = self.parent_allocator.allocFn(self.parent_allocator, len, ptr_align, len_align);
+            const result = self.parent_allocator.allocFn(self.parent_allocator, len, ptr_align, len_align, ret_len);
             if (result) |buff| {
                 self.allocated += len;
             } else |err| {
@@ -33,10 +33,10 @@ pub fn MeasureAllocator() type {
             return result;
         }
 
-        fn resize(allocator: *Allocator, buf: []u8, new_len: usize, len_align: u29) std.mem.Allocator.Error!usize {
+        fn resize(allocator: *Allocator, buf: []u8, buf_align: u29, new_len: usize, len_align: u29, ret_len: usize) std.mem.Allocator.Error!usize {
             const self = @fieldParentPtr(Self, "allocator", allocator);
             var old_len: usize = buf.len;
-            const result = self.parent_allocator.resizeFn(self.parent_allocator, buf, new_len, len_align);
+            const result = self.parent_allocator.resizeFn(self.parent_allocator, buf, buf_align, new_len, len_align, ret_len);
             if (result) |buff| {
                 if (old_len < new_len) {
                     self.allocated += new_len - old_len;

@@ -25,7 +25,7 @@ pub const Sampler = struct {
         var rv = try allocator.create(Sampler);
         rv.map = std.AutoHashMap(u64, Sample).init(allocator);
         rv.allocator = allocator;
-        rv.mutex = std.Mutex.init();
+        rv.mutex = std.Mutex{};
         return rv;
     }
 
