@@ -101,7 +101,6 @@ pub fn main() !void {
         }
 
         if (std.time.milliTimestamp() > next_flush) {
-            // sampler.dump();
             sampler.flush(config) catch |err| {
                 warn("can't flush: {}", .{err});
             };

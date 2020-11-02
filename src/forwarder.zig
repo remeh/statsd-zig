@@ -14,7 +14,6 @@ pub const Forwarder = struct {
     pub fn flush(allocator: *std.mem.Allocator, config: Config, samples: *std.AutoHashMap(u64, Sample)) !void {
         var buf = try std.ArrayListSentineled(u8, 0).initSize(allocator, 0);
         defer buf.deinit();
-        defer samples.*.deinit();
 
         try buf.appendSlice("{\"series\":[");
 
@@ -127,3 +126,28 @@ pub const Forwarder = struct {
         std.debug.warn("http flush done, request payload size: {}\n", .{buf.len()});
     }
 };
+
+test "write_sample_test" {
+    var buf = try std.ArrayListSentineled(u8, 0).initSize(std.testing.allocator, 0);
+
+    var name = try std.testing.allocator.alloc(u8, "my.metric".len);
+    std.mem.copy(u8, name, "my.metric");
+
+    var sample = Sample{
+        .metric_name = name,
+        .metric_type = metric.MetricTypeGauge,
+        .samples = 1,
+        .value = 1,
+    };
+
+    var config = Config{
+        .hostname = undefined,
+        .apikey = undefined,
+        .max_mem_mb = undefined,
+    };
+
+    try Forwarder.write_sample(std.testing.allocator, config, &buf, sample);
+
+    std.testing.allocator.free(name);
+    buf.deinit();
+}

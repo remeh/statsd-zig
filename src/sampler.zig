@@ -71,28 +71,33 @@ pub const Sampler = struct {
         return self.map.count();
     }
 
-    pub fn reset(self: *Sampler) void {
-        self.map.clear();
-    }
-
     pub fn flush(self: *Sampler, config: Config) !void {
         var held = self.mutex.acquire();
+
         // TODO(remy): do not flush if no metrics have been received
         try Forwarder.flush(self.allocator, config, &self.map);
+
+        // release the memory used for all metrics names and reset the map
+        var it = self.map.iterator();
+        while (it.next()) |kv| {
+            self.allocator.free(kv.*.value.metric_name);
+        }
+        self.map.deinit();
         self.map = std.AutoHashMap(u64, Sample).init(self.allocator);
+
         held.release();
     }
 
     /// destroy frees all the memory used by the Sampler and the instance itself.
     /// The Sampler instance should not be used anymore after a call to destroy.
     pub fn destroy(self: *Sampler) void {
+        // release the memory used for all metrics names
         var it = self.map.iterator();
         while (it.next()) |kv| {
             self.allocator.free(kv.*.value.metric_name);
         }
         self.map.deinit();
         self.allocator.destroy(self);
-        self.mutex.deinit();
     }
 
     // TODO(remy): debug method, remove?
