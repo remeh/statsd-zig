@@ -95,9 +95,10 @@ pub fn main() !void {
 
         // TODO(remy): add a knob here
         if (measure_allocator.allocated > config.max_mem_mb * 1024 * 1024) {
+            // free the memory and reset the arena and measure allocator.
             arena.deinit();
             arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-            measure_allocator.allocated = 0;
+            measure_allocator = MeasureAllocator().init(&arena.allocator);
         }
 
         if (std.time.milliTimestamp() > next_flush) {
