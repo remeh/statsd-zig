@@ -141,9 +141,9 @@ test "write_sample_test" {
     };
 
     var config = Config{
-        .hostname = undefined,
-        .apikey = undefined,
-        .max_mem_mb = undefined,
+        .hostname = "local",
+        .apikey = "abcdef",
+        .max_mem_mb = 20000,
     };
 
     try Forwarder.write_sample(std.testing.allocator, config, &buf, sample);

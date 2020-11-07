@@ -91,10 +91,15 @@ pub fn main() !void {
 
             // send this buffer back to the usable queue of buffers
             tx.b.put(node);
+
+            if (measure_allocator.allocated > config.max_mem_mb * 1024 * 1024) {
+                break;
+            }
         }
 
         // TODO(remy): add a knob here
         if (measure_allocator.allocated > config.max_mem_mb * 1024 * 1024) {
+            warn("reinit phase {}MB.\n", .{measure_allocator.allocated / 1024 / 1024});
             // free the memory and reset the arena and measure allocator.
             arena.deinit();
             arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
