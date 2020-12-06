@@ -122,7 +122,7 @@ pub const Parser = struct {
             part = iterator.next();
         }
 
-        var tags = rv.span();
+        var tags = rv.items;
         std.sort.insertionSort([]const u8, tags, {}, lessThanTags);
 
         return rv;
@@ -155,12 +155,12 @@ test "parse_tags" {
     const tags: []const u8 = "#my:tag,dev:env,z:value,aaa:aba,aaa:aaa1";
     var rv = try Parser.parse_tags(std.testing.allocator, tags);
 
-    assert(rv.span().len == 5);
-    assert(std.mem.eql(u8, rv.span()[0], "aaa:aaa1"));
-    assert(std.mem.eql(u8, rv.span()[1], "aaa:aba"));
-    assert(std.mem.eql(u8, rv.span()[2], "dev:env"));
-    assert(std.mem.eql(u8, rv.span()[3], "my:tag"));
-    assert(std.mem.eql(u8, rv.span()[4], "z:value"));
+    assert(rv.items.len == 5);
+    assert(std.mem.eql(u8, rv.items[0], "aaa:aaa1"));
+    assert(std.mem.eql(u8, rv.items[1], "aaa:aba"));
+    assert(std.mem.eql(u8, rv.items[2], "dev:env"));
+    assert(std.mem.eql(u8, rv.items[3], "my:tag"));
+    assert(std.mem.eql(u8, rv.items[4], "z:value"));
 
     rv.deinit();
 }

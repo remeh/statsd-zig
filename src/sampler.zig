@@ -113,8 +113,8 @@ pub const Sampler = struct {
         var h = fnv1a.init();
         h.update(m.name);
         var i: usize = 0;
-        while (i < m.tags.span().len) {
-            h.update(m.tags.span()[i]);
+        while (i < m.tags.items.len) {
+            h.update(m.tags.items[i]);
             i += 1;
         }
         return h.final();

@@ -79,9 +79,9 @@ pub fn main() !void {
                 packets_parsed += 1;
                 // sampling
                 i = 0;
-                while (i < metrics.span().len) {
+                while (i < metrics.items.len) {
                     metrics_parsed += 1;
-                    try sampler.sample(metrics.span()[i]);
+                    try sampler.sample(metrics.items[i]);
                     i += 1;
                 }
             } else |err| {
