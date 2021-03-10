@@ -8,6 +8,7 @@ const metric = @import("metric.zig");
 const Config = @import("config.zig").Config;
 const Parser = @import("parser.zig").Parser; // used in tests
 const Forwarder = @import("forwarder.zig").Forwarder;
+const Transaction = @import("forwarder.zig").Transaction;
 
 pub const Sample = struct {
     metric_name: []u8,
@@ -20,12 +21,16 @@ pub const Sampler = struct {
     map: std.AutoHashMap(u64, Sample),
     allocator: *std.mem.Allocator,
     mutex: std.Mutex,
+    forwarder: Forwarder,
 
     pub fn init(allocator: *std.mem.Allocator) !*Sampler {
         var rv = try allocator.create(Sampler);
         rv.map = std.AutoHashMap(u64, Sample).init(allocator);
         rv.allocator = allocator;
         rv.mutex = std.Mutex{};
+        rv.forwarder = Forwarder{
+            .transactions = std.ArrayList(*Transaction).init(allocator),
+        };
         return rv;
     }
 
@@ -74,8 +79,7 @@ pub const Sampler = struct {
     pub fn flush(self: *Sampler, config: Config) !void {
         var held = self.mutex.acquire();
 
-        // TODO(remy): do not flush if no metrics have been received
-        try Forwarder.flush(self.allocator, config, &self.map);
+        try self.forwarder.flush(self.allocator, config, &self.map);
 
         // release the memory used for all metrics names and reset the map
         var it = self.map.iterator();
@@ -90,12 +94,13 @@ pub const Sampler = struct {
 
     /// destroy frees all the memory used by the Sampler and the instance itself.
     /// The Sampler instance should not be used anymore after a call to destroy.
-    pub fn destroy(self: *Sampler) void {
+    pub fn deinit(self: *Sampler) void {
         // release the memory used for all metrics names
         var it = self.map.iterator();
         while (it.next()) |kv| {
             self.allocator.free(kv.*.value.metric_name);
         }
+        self.forwarder.deinit();
         self.map.deinit();
         self.allocator.destroy(self);
     }
@@ -113,9 +118,8 @@ pub const Sampler = struct {
         var h = fnv1a.init();
         h.update(m.name);
         var i: usize = 0;
-        while (i < m.tags.items.len) {
+        while (i < m.tags.items.len) : (i += 1) {
             h.update(m.tags.items[i]);
-            i += 1;
         }
         return h.final();
     }
@@ -165,7 +169,7 @@ test "sampling hashing" {
         .tags = tags,
     };
 
-    Sampler.destroy(sampler);
+    sampler.deinit();
     tags.deinit();
     other_tags.deinit();
 }
@@ -197,7 +201,7 @@ test "sampling gauge" {
         assert(sample.value == 20.0);
     }
 
-    Sampler.destroy(sampler);
+    sampler.deinit();
 }
 
 test "sampling counter" {
@@ -229,5 +233,5 @@ test "sampling counter" {
         assert(sample.samples == 2);
     }
 
-    Sampler.destroy(sampler);
+    sampler.deinit();
 }

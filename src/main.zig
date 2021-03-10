@@ -71,6 +71,7 @@ pub fn main() !void {
     var metrics_parsed: u32 = 0;
 
     // pipeline mainloop
+    // TODO(remy): listen for Ctrl-C to clean up before exiting
     while (true) {
         while (!tx.q.isEmpty()) {
             var node = tx.q.get().?;
