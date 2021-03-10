@@ -8,14 +8,38 @@ const metric = @import("metric.zig");
 //const endpoint = "https://agent.datadoghq.com/api/v1/series";
 const endpoint = "http://localhost:8001";
 
+pub const ForwarderError = error{RequestFailed};
+
+/// Transaction is the content of the HTTP request sent to Datadog.
+/// If sending a transaction to the intake fails, we'll keep it in RAM for some
+/// time to do some retries.
+pub const Transaction = struct {
+    data: std.ArrayListSentineled(u8, 0),
+    creation_time: i64,
+
+    pub fn deinit(self: *Transaction) void {
+        self.data.deinit();
+    }
+};
+
 pub const Forwarder = struct {
+    transactions: std.ArrayList(*Transaction),
+
+    pub fn deinit(self: *Forwarder) void {
+        self.transactions.deinit();
+    }
+
     /// flush is responsible for sending all the given metrics to some HTTP route.
     /// It owns the list of metrics and is responsible for freeing its memory.
-    pub fn flush(allocator: *std.mem.Allocator, config: Config, samples: *std.AutoHashMap(u64, Sample)) !void {
-        var buf = try std.ArrayListSentineled(u8, 0).initSize(allocator, 0);
-        defer buf.deinit();
+    pub fn flush(self: *Forwarder, allocator: *std.mem.Allocator, config: Config, samples: *std.AutoHashMap(u64, Sample)) !void {
+        // TODO(remy): we should not create a new transaction if there is no metrics
+        // to flush, however, we should still try to send old transactions if any
+        var tx = &Transaction{
+            .data = try std.ArrayListSentineled(u8, 0).initSize(allocator, 0),
+            .creation_time = 0,
+        };
 
-        try buf.appendSlice("{\"series\":[");
+        try tx.data.appendSlice("{\"series\":[");
 
         // append every sample
 
@@ -24,19 +48,33 @@ pub const Forwarder = struct {
         var kv = iterator.next();
         while (kv != null) {
             if (!first) {
-                try buf.append(',');
+                try tx.data.append(',');
             }
             first = false;
-            try write_sample(allocator, config, &buf, kv.?.value);
+            try write_sample(allocator, config, tx, kv.?.value);
             kv = iterator.next();
         }
 
-        try buf.appendSlice("]}");
+        try tx.data.appendSlice("]}");
 
-        try send_http_request(allocator, config, buf);
+        send_http_request(allocator, config, tx) catch |err| {
+            std.debug.warn("can't send a transaction: {}\nstoring the transaction of size {} bytes\n", .{ err, tx.data.len() });
+            // TODO(remy): we want to limit how many transactions are stored in RAM
+            self.transactions.append(tx) catch |err2| {
+                std.debug.warn("can't store the failing transaction {}\n", .{err2});
+                tx.deinit();
+            };
+            return;
+        };
+
+        // TODO(remy): we should see if there is some other transaction to
+        // retry.
+
+        // this transaction succeed, we can deinit it.
+        tx.deinit();
     }
 
-    fn write_sample(allocator: *std.mem.Allocator, config: Config, buf: *std.ArrayListSentineled(u8, 0), sample: Sample) !void {
+    fn write_sample(allocator: *std.mem.Allocator, config: Config, tx: *Transaction, sample: Sample) !void {
         // {
         //   "metric": "system.mem.used",
         //   "points": [
@@ -79,12 +117,13 @@ pub const Forwarder = struct {
         defer allocator.free(json);
 
         // append it to the main buffer
-        try buf.*.appendSlice(json);
+        try tx.*.data.appendSlice(json);
     }
 
-    fn send_http_request(allocator: *std.mem.Allocator, config: Config, buf: std.ArrayListSentineled(u8, 0)) !void {
+    fn send_http_request(allocator: *std.mem.Allocator, config: Config, tx: *Transaction) !void {
         _ = c.curl_global_init(c.CURL_GLOBAL_ALL);
 
+        var failed: bool = false;
         var curl: ?*c.CURL = null;
         var res: c.CURLcode = undefined;
         var headers: [*c]c.curl_slist = null;
@@ -103,9 +142,9 @@ pub const Forwarder = struct {
             _ = c.curl_easy_setopt(curl, c.CURLoption.CURLOPT_URL, @ptrCast([*:0]const u8, url));
 
             // body
-            _ = c.curl_easy_setopt(curl, c.CURLoption.CURLOPT_POSTFIELDSIZE, buf.len());
+            _ = c.curl_easy_setopt(curl, c.CURLoption.CURLOPT_POSTFIELDSIZE, tx.data.len());
             _ = c.curl_easy_setopt(curl, c.CURLoption.CURLOPT_POST, @as(c_int, 1));
-            _ = c.curl_easy_setopt(curl, c.CURLoption.CURLOPT_POSTFIELDS, @ptrCast([*:0]const u8, buf.span()));
+            _ = c.curl_easy_setopt(curl, c.CURLoption.CURLOPT_POSTFIELDS, @ptrCast([*:0]const u8, tx.data.span()));
 
             // http headers
             headers = c.curl_slist_append(headers, "Content-Type: application/json");
@@ -116,6 +155,7 @@ pub const Forwarder = struct {
             res = c.curl_easy_perform(curl);
             if (@enumToInt(res) != @bitCast(c_uint, c.CURLE_OK)) {
                 _ = c.printf("curl_easy_perform() failed: %s\n", c.curl_easy_strerror(res));
+                failed = true;
             }
 
             c.curl_slist_free_all(headers);
@@ -123,9 +163,16 @@ pub const Forwarder = struct {
         }
 
         c.curl_global_cleanup();
-        std.debug.warn("http flush done, request payload size: {}\n", .{buf.len()});
+
+        if (failed) {
+            return ForwarderError.RequestFailed;
+        } else {
+            std.debug.warn("http flush done, request payload size: {}\n", .{tx.data.len()});
+        }
     }
 };
+
+// TODO(remy): write some tests around the transaction
 
 test "write_sample_test" {
     var buf = try std.ArrayListSentineled(u8, 0).initSize(std.testing.allocator, 0);
