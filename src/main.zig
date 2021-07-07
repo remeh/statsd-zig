@@ -19,11 +19,10 @@ pub const flush_frequency = 15000;
 
 pub const ThreadContext = struct {
 // packets read from the network waiting to be processed
-    q: std.atomic.Queue(Packet),
-    // packets buffers available to share data between the listener thread
-    // and the parser thread.
-    b: std.atomic.Queue(Packet)
-};
+q: std.atomic.Queue(Packet),
+// packets buffers available to share data between the listener thread
+// and the parser thread.
+b: std.atomic.Queue(Packet) };
 
 pub fn main() !void {
     // queue communicating packets to parse
@@ -58,7 +57,7 @@ pub fn main() !void {
     var sampler = try Sampler.init(std.heap.page_allocator);
 
     // spawn the listening thread
-    var listener_thread = std.Thread.spawn(&tx, listener);
+    var listener_thread = std.Thread.spawn(listener, &tx);
 
     // prepare the allocator used by the parser
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -73,6 +72,7 @@ pub fn main() !void {
     // pipeline mainloop
     // TODO(remy): listen for Ctrl-C to clean up before exiting
     while (true) {
+        std.os.nanosleep(0, 100 * 1000 * 1000);
         while (!tx.q.isEmpty()) {
             var node = tx.q.get().?;
             // parse the packets
@@ -86,8 +86,8 @@ pub fn main() !void {
                     i += 1;
                 }
             } else |err| {
-                warn("can't parse packet: {}\n", .{err});
-                warn("packet: {}\n", .{node.data.payload});
+                warn("can't parse packet: {s}\n", .{err});
+                warn("packet: {s}\n", .{node.data.payload});
             }
 
             // send this buffer back to the usable queue of buffers
@@ -109,11 +109,11 @@ pub fn main() !void {
 
         if (std.time.milliTimestamp() > next_flush) {
             sampler.flush(config) catch |err| {
-                warn("can't flush: {}", .{err});
+                warn("can't flush: {s}", .{err});
             };
 
-            warn("packets parsed: {}/s\n", .{@divTrunc(packets_parsed, (flush_frequency / 1000))});
-            warn("metrics parsed: {}/s\n", .{@divTrunc(metrics_parsed, (flush_frequency / 1000))});
+            warn("packets parsed: {d}/s\n", .{@divTrunc(packets_parsed, (flush_frequency / 1000))});
+            warn("metrics parsed: {d}/s\n", .{@divTrunc(metrics_parsed, (flush_frequency / 1000))});
             packets_parsed = 0;
             metrics_parsed = 0;
 

@@ -31,6 +31,7 @@ pub fn listener(context: *ThreadContext) !void {
     var last_drop_message = std.time.milliTimestamp();
 
     while (true) {
+        std.os.nanosleep(0, 100 * 1000 * 1000);
         const rlen = os.recvfrom(sockfd, buf, 0, null, null) catch {
             continue;
         };
@@ -48,6 +49,7 @@ pub fn listener(context: *ThreadContext) !void {
         // copy the data
         std.mem.copy(u8, node.data.payload[0..rlen], buf[0..rlen]);
         node.data.len = rlen;
+        warn("received: {}\n", .{node.data});
         // send it for processing
         context.q.put(node);
 

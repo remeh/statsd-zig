@@ -6,8 +6,7 @@ metrics to Datadog.
 ## Getting started
 
 - `libcurl` must be available on the system
-- Build the binary with `zig build`. You will need a recent master version of the
-toolchain (>= zig master 2020-07-12)
+- Build the binary with `zig build` (build with Zig `0.8.0`)
 - Set the environment variables `APIKEY` and `HOSTNAME` to configure the daemon
 - Launch the daemon and start sending it counters and gauges on port udp/8125
 

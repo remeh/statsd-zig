@@ -2,7 +2,7 @@ const std = @import("std");
 const mem = std.mem;
 const warn = std.debug.warn;
 const fnv1a = std.hash.Fnv1a_64;
-const assert = @import("std").debug.assert;
+const assert = std.debug.assert;
 
 const metric = @import("metric.zig");
 const Config = @import("config.zig").Config;
@@ -20,14 +20,14 @@ pub const Sample = struct {
 pub const Sampler = struct {
     map: std.AutoHashMap(u64, Sample),
     allocator: *std.mem.Allocator,
-    mutex: std.Mutex,
+    mutex: std.Thread.Mutex,
     forwarder: Forwarder,
 
     pub fn init(allocator: *std.mem.Allocator) !*Sampler {
         var rv = try allocator.create(Sampler);
         rv.map = std.AutoHashMap(u64, Sample).init(allocator);
         rv.allocator = allocator;
-        rv.mutex = std.Mutex{};
+        rv.mutex = std.Thread.Mutex{};
         rv.forwarder = Forwarder{
             .transactions = std.ArrayList(*Transaction).init(allocator),
         };
@@ -84,7 +84,7 @@ pub const Sampler = struct {
         // release the memory used for all metrics names and reset the map
         var it = self.map.iterator();
         while (it.next()) |kv| {
-            self.allocator.free(kv.*.value.metric_name);
+            self.allocator.free(kv.value_ptr.*.metric_name);
         }
         self.map.deinit();
         self.map = std.AutoHashMap(u64, Sample).init(self.allocator);

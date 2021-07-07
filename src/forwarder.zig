@@ -21,14 +21,14 @@ pub const ForwarderError = error{RequestFailed};
 /// time to do some retries.
 pub const Transaction = struct {
     allocator: *std.mem.Allocator,
-    data: std.ArrayListSentineled(u8, 0),
+    data: std.ArrayList(u8),
     creation_time: i64, // unit: ms
     tries: u8,
 
     pub fn init(allocator: *std.mem.Allocator, creation_time: i64) !*Transaction {
         var rv = try allocator.create(Transaction);
         rv.allocator = allocator;
-        rv.data = try std.ArrayListSentineled(u8, 0).initSize(allocator, 0);
+        rv.data = std.ArrayList(u8).init(allocator);
         rv.creation_time = creation_time;
         rv.tries = 0;
         return rv;
@@ -62,7 +62,7 @@ pub const Forwarder = struct {
 
             // try to send the transaction
             send_http_request(allocator, config, tx) catch |err| {
-                std.debug.warn("can't send a transaction: {}\nstoring the transaction of size {} bytes\n", .{ err, tx.data.len() });
+                std.debug.warn("can't send a transaction: {s}\nstoring the transaction of size {d} bytes\n", .{ err, tx.data.items.len });
 
                 // limit the amount of transactions stored
                 if (self.transactions.items.len > max_stored_transactions) {
@@ -72,7 +72,7 @@ pub const Forwarder = struct {
                 }
 
                 self.transactions.append(tx) catch |err2| {
-                    std.debug.warn("can't store the failing transaction {}\n", .{err2});
+                    std.debug.warn("can't store the failing transaction {s}\n", .{err2});
                     tx.deinit();
                 };
                 return;
@@ -101,14 +101,12 @@ pub const Forwarder = struct {
 
         var first: bool = true;
         var iterator = samples.*.iterator();
-        var kv = iterator.next();
-        while (kv != null) {
+        while (iterator.next()) |kv| {
             if (!first) {
                 try tx.data.append(',');
             }
             first = false;
-            try write_sample(allocator, config, tx, kv.?.value);
-            kv = iterator.next();
+            try write_sample(allocator, config, tx, kv.value_ptr.*);
         }
 
         try tx.data.appendSlice("]}");
@@ -123,16 +121,16 @@ pub const Forwarder = struct {
             }
             var tx = self.transactions.orderedRemove(0);
             send_http_request(allocator, config, tx) catch |err| {
-                std.debug.warn("error while retrying a transaction: {}\n", .{err});
+                std.debug.warn("error while retrying a transaction: {s}\n", .{err});
                 if (tx.tries < max_retry_per_transaction) {
                     tx.tries += 1;
                     self.transactions.append(tx) catch |err2| {
                         tx.deinit();
-                        std.debug.warn("can't store the failing transaction {}\n", .{err2});
+                        std.debug.warn("can't store the failing transaction {s}\n", .{err2});
                     };
                 } else {
                     tx.deinit();
-                    std.debug.warn("this transaction of {} bytes dating from {} has been dropped.\n", .{ tx.data.len(), tx.creation_time });
+                    std.debug.warn("this transaction of {d} bytes dating from {d} has been dropped.\n", .{ tx.data.items.len, tx.creation_time });
                 }
                 break; // useless to try more transaction right now
             };
@@ -170,7 +168,7 @@ pub const Forwarder = struct {
         // build the json
         const json = try std.fmt.allocPrint(
             allocator,
-            "{{\"metric\":\"{}\",\"host\":\"{}\",\"type\":\"{}\",\"points\":[[{},{d}]],\"interval\":0}}",
+            "{{\"metric\":\"{s}\",\"host\":\"{s}\",\"type\":\"{s}\",\"points\":[[{d},{d}]],\"interval\":0}}",
             .{
                 sample.metric_name,
                 config.hostname,
@@ -194,11 +192,11 @@ pub const Forwarder = struct {
         var headers: [*c]c.curl_slist = null;
 
         // url
-        var url = try std.fmt.allocPrint0(allocator, "{}?api_key={}", .{ endpoint, config.apikey });
+        var url = try std.fmt.allocPrint0(allocator, "{s}?api_key={s}", .{ endpoint, config.apikey });
         defer allocator.free(url);
 
         // apikeyHeader
-        var apikeyHeader = try std.fmt.allocPrint0(allocator, "Dd-Api-Key: {}", .{config.apikey});
+        var apikeyHeader = try std.fmt.allocPrint0(allocator, "Dd-Api-Key: {s}", .{config.apikey});
         defer allocator.free(apikeyHeader);
 
         curl = c.curl_easy_init();
@@ -207,9 +205,9 @@ pub const Forwarder = struct {
             _ = c.curl_easy_setopt(curl, c.CURLoption.CURLOPT_URL, @ptrCast([*:0]const u8, url));
 
             // body
-            _ = c.curl_easy_setopt(curl, c.CURLoption.CURLOPT_POSTFIELDSIZE, tx.data.len());
+            _ = c.curl_easy_setopt(curl, c.CURLoption.CURLOPT_POSTFIELDSIZE, tx.data.items.len);
             _ = c.curl_easy_setopt(curl, c.CURLoption.CURLOPT_POST, @as(c_int, 1));
-            _ = c.curl_easy_setopt(curl, c.CURLoption.CURLOPT_POSTFIELDS, @ptrCast([*:0]const u8, tx.data.span()));
+            _ = c.curl_easy_setopt(curl, c.CURLoption.CURLOPT_POSTFIELDS, @ptrCast([*:0]const u8, tx.data.items));
 
             // http headers
             headers = c.curl_slist_append(headers, "Content-Type: application/json");
@@ -232,7 +230,7 @@ pub const Forwarder = struct {
         if (failed) {
             return ForwarderError.RequestFailed;
         } else {
-            std.debug.warn("http flush done, request payload size: {}\n", .{tx.data.len()});
+            std.debug.warn("http flush done, request payload size: {}\n", .{tx.data.items.len});
         }
     }
 };
