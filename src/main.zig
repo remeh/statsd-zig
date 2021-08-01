@@ -18,11 +18,14 @@ const MeasureAllocator = @import("measure_allocator.zig").MeasureAllocator;
 pub const flush_frequency = 15000;
 
 pub const ThreadContext = struct {
-// packets read from the network waiting to be processed
-q: std.atomic.Queue(Packet),
-// packets buffers available to share data between the listener thread
-// and the parser thread.
-b: std.atomic.Queue(Packet) };
+    // packets read from the network waiting to be processed
+    q: std.atomic.Queue(Packet),
+    // packets buffers available to share data between the listener thread
+    // and the parser thread.
+    b: std.atomic.Queue(Packet),
+    // is running in UDS
+    uds: bool,
+};
 
 pub fn main() !void {
     // queue communicating packets to parse
@@ -44,14 +47,15 @@ pub fn main() !void {
         i += 1;
     }
 
+    // read config
+    var config = try Config.read();
+
     // shared context
     var tx = ThreadContext{
         .q = queue,
         .b = packet_buffers,
+        .uds = config.uds,
     };
-
-    // read config
-    var config = try Config.read();
 
     // create the sampler
     var sampler = try Sampler.init(std.heap.page_allocator);
@@ -72,7 +76,6 @@ pub fn main() !void {
     // pipeline mainloop
     // TODO(remy): listen for Ctrl-C to clean up before exiting
     while (true) {
-        std.os.nanosleep(0, 100 * 1000 * 1000);
         while (!tx.q.isEmpty()) {
             var node = tx.q.get().?;
             // parse the packets
@@ -98,9 +101,8 @@ pub fn main() !void {
             }
         }
 
-        // TODO(remy): add a knob here
         if (measure_allocator.allocated > config.max_mem_mb * 1024 * 1024) {
-            warn("reinit phase {}MB.\n", .{measure_allocator.allocated / 1024 / 1024});
+            warn("memory arena has reached {}MB, deinit and recreate.\n", .{measure_allocator.allocated / 1024 / 1024});
             // free the memory and reset the arena and measure allocator.
             arena.deinit();
             arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -120,4 +122,6 @@ pub fn main() !void {
             next_flush = std.time.milliTimestamp() + flush_frequency;
         }
     }
+
+    // TODO(remy): delete the socket
 }

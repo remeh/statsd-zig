@@ -10,6 +10,7 @@ pub const Config = struct {
     hostname: []const u8,
     apikey: []const u8,
     max_mem_mb: u32,
+    uds: bool,
 
     pub fn read() ConfigError!Config {
         var apikey = std.os.getenv("APIKEY");
@@ -32,10 +33,16 @@ pub const Config = struct {
             max_mem_value = parsed_value;
         }
 
+        var uds: bool = false;
+        if (std.os.getenv("UDS") != null) {
+            uds = true;
+        }
+
         return Config{
             .apikey = apikey.?,
             .hostname = hostname.?,
             .max_mem_mb = max_mem_value,
+            .uds = uds,
         };
     }
 };

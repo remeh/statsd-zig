@@ -10,6 +10,5 @@ pub const Metric = struct {
     name: []const u8,
     value: f32,
     type: u8,
-    // 64 tags maximum for nw
     tags: Tags,
 };

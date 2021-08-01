@@ -5,10 +5,11 @@ const os = std.os;
 const ThreadContext = @import("main.zig").ThreadContext;
 
 pub const Packet = struct {
-    payload: []u8, len: usize
+    payload: []u8,
+    len: usize,
 };
 
-fn open_socket() !i32 {
+fn open_socket_udp() !i32 {
     var sockfd: i32 = try os.socket(
         os.AF_INET,
         os.SOCK_DGRAM | os.SOCK_CLOEXEC | os.SOCK_NONBLOCK,
@@ -19,9 +20,27 @@ fn open_socket() !i32 {
     return sockfd;
 }
 
+fn open_socket_uds() !i32 {
+    var sockfd: i32 = try os.socket(
+        os.AF_UNIX,
+        os.SOCK_DGRAM | os.SOCK_CLOEXEC | os.SOCK_NONBLOCK,
+        0,
+    );
+    var addr: std.net.Address = try std.net.Address.initUnix("statsd.sock");
+    try os.bind(sockfd, &addr.any, @sizeOf(os.sockaddr_in));
+    return sockfd;
+}
+
 pub fn listener(context: *ThreadContext) !void {
-    var sockfd: i32 = try open_socket();
-    warn("starting the listener on 127.0.0.1:8125\n", .{});
+    var sockfd: i32 = 0;
+
+    if (context.uds) {
+        sockfd = try open_socket_uds();
+        warn("starting the listener on statsd.sock\n", .{});
+    } else {
+        sockfd = try open_socket_udp();
+        warn("starting the listener on localhost:8125\n", .{});
+    }
 
     // reading buffer
     var array: [8192]u8 = undefined;
@@ -32,6 +51,7 @@ pub fn listener(context: *ThreadContext) !void {
 
     while (true) {
         std.os.nanosleep(0, 100 * 1000 * 1000);
+
         const rlen = os.recvfrom(sockfd, buf, 0, null, null) catch {
             continue;
         };
@@ -49,7 +69,6 @@ pub fn listener(context: *ThreadContext) !void {
         // copy the data
         std.mem.copy(u8, node.data.payload[0..rlen], buf[0..rlen]);
         node.data.len = rlen;
-        warn("received: {}\n", .{node.data});
         // send it for processing
         context.q.put(node);
 
