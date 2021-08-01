@@ -13,6 +13,7 @@ const Transaction = @import("forwarder.zig").Transaction;
 pub const Sample = struct {
     metric_name: []u8,
     metric_type: u8,
+    tags: metric.Tags,
     samples: u64,
     value: f32,
 };
@@ -41,6 +42,7 @@ pub const Sampler = struct {
             var newSample = Sample{
                 .metric_name = s.metric_name,
                 .metric_type = s.metric_type,
+                .tags = s.tags,
                 .samples = s.samples + 1,
                 .value = s.value,
             };
@@ -67,6 +69,7 @@ pub const Sampler = struct {
             .metric_name = name,
             .metric_type = m.type,
             .samples = 1,
+            .tags = m.tags,
             .value = m.value,
         });
         held.release();

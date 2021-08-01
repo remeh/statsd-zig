@@ -62,7 +62,7 @@ pub const Forwarder = struct {
 
             // try to send the transaction
             send_http_request(allocator, config, tx) catch |err| {
-                std.debug.warn("can't send a transaction: {s}\nstoring the transaction of size {d} bytes\n", .{ err, tx.data.items.len });
+                std.debug.warn("can't send a transaction: {s}\nstoring the transaction of size {d} bytes [{s}]\n", .{ err, tx.data.items.len, tx.data.items });
 
                 // limit the amount of transactions stored
                 if (self.transactions.items.len > max_stored_transactions) {
@@ -165,13 +165,28 @@ pub const Forwarder = struct {
             },
         }
 
+        // tags
+        var tags = std.ArrayList(u8).init(allocator);
+        var i: usize = 0;
+        for (sample.tags.items) |tag| {
+            try tags.append('"');
+            try tags.appendSlice(tag);
+            try tags.append('"');
+            if (i < sample.tags.items.len - 1) {
+                try tags.append(',');
+            }
+            i += 1;
+        }
+        defer tags.deinit();
+
         // build the json
         const json = try std.fmt.allocPrint(
             allocator,
-            "{{\"metric\":\"{s}\",\"host\":\"{s}\",\"type\":\"{s}\",\"points\":[[{d},{d}]],\"interval\":0}}",
+            "{{\"metric\":\"{s}\",\"host\":\"{s}\",\"tags\":[{s}],\"type\":\"{s}\",\"points\":[[{d},{d}]],\"interval\":0}}",
             .{
                 sample.metric_name,
                 config.hostname,
+                tags.items,
                 t,
                 @divTrunc(std.time.milliTimestamp(), 1000),
                 sample.value,
@@ -264,6 +279,8 @@ test "transaction_mem_usage" {
 }
 
 // TODO(remy): add a test for replay_old_transactions
+
+// TODO(remy): add a test for some json complete serialization
 
 test "write_sample_test" {
     const allocator = std.testing.allocator;
