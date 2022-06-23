@@ -1,23 +1,36 @@
 # statsd-zig
 
-Basic DogStatsD UDP server supporting gauges and counters and sending these
+Basic DogStatsD UDP/UDS server supporting gauges and counters and sending these
 metrics to Datadog.
 
 ## Getting started
 
 - `libcurl` must be available on the system
-- Build the binary with `zig build` (build with Zig `0.8.0`)
+- Build the binary with `zig build` (build with Zig `0.9.1`)
 - Set the environment variables `APIKEY` and `HOSTNAME` to configure the daemon
+
+### With UDP
+
 - Launch the daemon and start sending it counters and gauges on port udp/8125
+
+### With UDS
+
+- Set the environment variable `UDS` to a filepath of the unix socket you want to use
+- Sends counters and gauges on this unix socket with a DogStatsD client
 
 ## Memory usage
 
-Thanks to Zig not having a default memory allocator, I control every byte of
-memory allocated in this daemon (even the memory allocated by the standard library).
+I've developed a custom memory allocator measuring how much memory is allocated
+while processing the metrics (see [measure_allocator.zig](https://github.com/remeh/statsd-zig/blob/master/src/measure_allocator.zig)).
 
-The pattern I've used let me free all the memory allocated for metrics processing
-once it has reached a certain amount, thus, it let me have the total memory
-capped to a configurable maximum (set `MAX_MEM_MB`, default value 256).
+Using this allocator, the memory is allocated, used, and forgotten for a while.
+When the total amount of allocated memory reaches a certain size, it is completely
+freed.
+
+This provides two benefits:
+
+- close to no time spent freeing memory
+- you can easily configure the maximum amount of memory the server can use (set `MAX_MEM_MB`, default value 256)
 
 # Author
 
