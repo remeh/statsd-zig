@@ -2,7 +2,6 @@ const std = @import("std");
 const mem = std.mem;
 const fmt = std.fmt;
 const assert = std.debug.assert;
-const warn = std.debug.warn;
 const Queue = std.atomic.Queue;
 
 const listener = @import("listener.zig").listener;
@@ -61,13 +60,14 @@ pub fn main() !void {
     var sampler = try Sampler.init(std.heap.page_allocator);
 
     // spawn the listening thread
-    var listener_thread = std.Thread.spawn(listener, &tx);
+    const thread = try std.Thread.spawn(std.Thread.SpawnConfig{}, listener, .{&tx});
+    thread.detach();
 
     // prepare the allocator used by the parser
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
-    var measure_allocator = MeasureAllocator().init(&arena.allocator);
+    var measure_allocator = MeasureAllocator().init(arena.allocator());
 
     var next_flush = std.time.milliTimestamp() + flush_frequency;
     var packets_parsed: u32 = 0;
@@ -79,7 +79,7 @@ pub fn main() !void {
         while (!tx.q.isEmpty()) {
             var node = tx.q.get().?;
             // parse the packets
-            if (Parser.parse_packet(&measure_allocator.allocator, node.data)) |metrics| {
+            if (Parser.parse_packet(measure_allocator.allocator(), node.data)) |metrics| {
                 packets_parsed += 1;
                 // sampling
                 i = 0;
@@ -89,8 +89,8 @@ pub fn main() !void {
                     i += 1;
                 }
             } else |err| {
-                warn("can't parse packet: {s}\n", .{err});
-                warn("packet: {s}\n", .{node.data.payload});
+                std.log.err("can't parse packet: {s}", .{err});
+                std.log.err("packet: {s}", .{node.data.payload});
             }
 
             // send this buffer back to the usable queue of buffers
@@ -102,20 +102,20 @@ pub fn main() !void {
         }
 
         if (measure_allocator.allocated > config.max_mem_mb * 1024 * 1024) {
-            warn("memory arena has reached {}MB, deinit and recreate.\n", .{measure_allocator.allocated / 1024 / 1024});
+            std.log.debug("memory arena has reached {}MB, deinit and recreate.", .{measure_allocator.allocated / 1024 / 1024});
             // free the memory and reset the arena and measure allocator.
             arena.deinit();
             arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-            measure_allocator = MeasureAllocator().init(&arena.allocator);
+            measure_allocator = MeasureAllocator().init(arena.allocator());
         }
 
         if (std.time.milliTimestamp() > next_flush) {
             sampler.flush(config) catch |err| {
-                warn("can't flush: {s}", .{err});
+                std.log.err("can't flush: {s}", .{err});
             };
 
-            warn("packets parsed: {d}/s\n", .{@divTrunc(packets_parsed, (flush_frequency / 1000))});
-            warn("metrics parsed: {d}/s\n", .{@divTrunc(metrics_parsed, (flush_frequency / 1000))});
+            std.log.info("packets parsed: {d}/s", .{@divTrunc(packets_parsed, (flush_frequency / 1000))});
+            std.log.info("metrics parsed: {d}/s", .{@divTrunc(metrics_parsed, (flush_frequency / 1000))});
             packets_parsed = 0;
             metrics_parsed = 0;
 

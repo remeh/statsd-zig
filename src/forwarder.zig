@@ -20,12 +20,12 @@ pub const ForwarderError = error{RequestFailed};
 /// If sending a transaction to the intake fails, we'll keep it in RAM for some
 /// time to do some retries.
 pub const Transaction = struct {
-    allocator: *std.mem.Allocator,
+    allocator: std.mem.Allocator,
     data: std.ArrayList(u8),
     creation_time: i64, // unit: ms
     tries: u8,
 
-    pub fn init(allocator: *std.mem.Allocator, creation_time: i64) !*Transaction {
+    pub fn init(allocator: std.mem.Allocator, creation_time: i64) !*Transaction {
         var rv = try allocator.create(Transaction);
         rv.allocator = allocator;
         rv.data = std.ArrayList(u8).init(allocator);
@@ -52,8 +52,8 @@ pub const Forwarder = struct {
 
     /// flush is responsible for sending all the given metrics to some HTTP route.
     /// It owns the list of metrics and is responsible for freeing its memory.
-    pub fn flush(self: *Forwarder, allocator: *std.mem.Allocator, config: Config, samples: *std.AutoHashMap(u64, Sample)) !void {
-        defer std.debug.warn("transactions stored in RAM: {}\n", .{self.transactions.items.len});
+    pub fn flush(self: *Forwarder, allocator: std.mem.Allocator, config: Config, samples: *std.AutoHashMap(u64, Sample)) !void {
+        defer std.log.debug("transactions stored in RAM: {}", .{self.transactions.items.len});
 
         // try to send a new transaction only if there is metrics to send
         // ---
@@ -62,17 +62,17 @@ pub const Forwarder = struct {
 
             // try to send the transaction
             send_http_request(allocator, config, tx) catch |err| {
-                std.debug.warn("can't send a transaction: {s}\nstoring the transaction of size {d} bytes [{s}]\n", .{ err, tx.data.items.len, tx.data.items });
+                std.log.warn("can't send a transaction: {s}\nstoring the transaction of size {d} bytes [{s}]", .{ err, tx.data.items.len, tx.data.items });
 
                 // limit the amount of transactions stored
                 if (self.transactions.items.len > max_stored_transactions) {
-                    std.debug.warn("too many transactions stored, removing a random old one.\n", .{});
+                    std.log.warn("too many transactions stored, removing a random old one.", .{});
                     var droppedtx = self.transactions.orderedRemove(0);
                     droppedtx.deinit();
                 }
 
                 self.transactions.append(tx) catch |err2| {
-                    std.debug.warn("can't store the failing transaction {s}\n", .{err2});
+                    std.log.warn("can't store the failing transaction {s}", .{err2});
                     tx.deinit();
                 };
                 return;
@@ -92,7 +92,7 @@ pub const Forwarder = struct {
     }
 
     /// creates a transaction with the given metric samples.
-    fn create_transaction(allocator: *std.mem.Allocator, config: Config, samples: *std.AutoHashMap(u64, Sample), creation_time: i64) !*Transaction {
+    fn create_transaction(allocator: std.mem.Allocator, config: Config, samples: *std.AutoHashMap(u64, Sample), creation_time: i64) !*Transaction {
         var tx = try Transaction.init(allocator, creation_time);
 
         try tx.data.appendSlice("{\"series\":[");
@@ -113,31 +113,31 @@ pub const Forwarder = struct {
         return tx;
     }
 
-    fn replay_old_transactions(self: *Forwarder, allocator: *std.mem.Allocator, config: Config, count: usize) void {
+    fn replay_old_transactions(self: *Forwarder, allocator: std.mem.Allocator, config: Config, maxReplayed: usize) void {
         var i: usize = 0;
-        while (i < 3) : (i += 1) {
+        while (i < maxReplayed) : (i += 1) {
             if (self.transactions.items.len == 0) {
                 break;
             }
             var tx = self.transactions.orderedRemove(0);
             send_http_request(allocator, config, tx) catch |err| {
-                std.debug.warn("error while retrying a transaction: {s}\n", .{err});
+                std.log.warn("error while retrying a transaction: {s}", .{err});
                 if (tx.tries < max_retry_per_transaction) {
                     tx.tries += 1;
                     self.transactions.append(tx) catch |err2| {
                         tx.deinit();
-                        std.debug.warn("can't store the failing transaction {s}\n", .{err2});
+                        std.log.err("can't store the failing transaction {s}", .{err2});
                     };
                 } else {
                     tx.deinit();
-                    std.debug.warn("this transaction of {d} bytes dating from {d} has been dropped.\n", .{ tx.data.items.len, tx.creation_time });
+                    std.log.err("this transaction of {d} bytes dating from {d} has been dropped.", .{ tx.data.items.len, tx.creation_time });
                 }
                 break; // useless to try more transaction right now
             };
         }
     }
 
-    fn write_sample(allocator: *std.mem.Allocator, config: Config, tx: *Transaction, sample: Sample) !void {
+    fn write_sample(allocator: std.mem.Allocator, config: Config, tx: *Transaction, sample: Sample) !void {
         // {
         //   "metric": "system.mem.used",
         //   "points": [
@@ -146,7 +146,7 @@ pub const Forwarder = struct {
         //       1811.29296875
         //     ]
         //   ],
-        //   "tags": [],
+        //   "tags": ["dev:remeh","env:test"],
         //   "host": "hostname",
         //   "type": "gauge",
         //   "interval": 0,
@@ -198,7 +198,7 @@ pub const Forwarder = struct {
         try tx.*.data.appendSlice(json);
     }
 
-    fn send_http_request(allocator: *std.mem.Allocator, config: Config, tx: *Transaction) !void {
+    fn send_http_request(allocator: std.mem.Allocator, config: Config, tx: *Transaction) !void {
         _ = c.curl_global_init(c.CURL_GLOBAL_ALL);
 
         var failed: bool = false;
@@ -207,31 +207,31 @@ pub const Forwarder = struct {
         var headers: [*c]c.curl_slist = null;
 
         // url
-        var url = try std.fmt.allocPrint0(allocator, "{s}?api_key={s}", .{ endpoint, config.apikey });
+        var url = try std.fmt.allocPrintZ(allocator, "{s}?api_key={s}", .{ endpoint, config.apikey });
         defer allocator.free(url);
 
         // apikeyHeader
-        var apikeyHeader = try std.fmt.allocPrint0(allocator, "Dd-Api-Key: {s}", .{config.apikey});
+        var apikeyHeader = try std.fmt.allocPrintZ(allocator, "Dd-Api-Key: {s}", .{config.apikey});
         defer allocator.free(apikeyHeader);
 
         curl = c.curl_easy_init();
         if (curl != null) {
             // url
-            _ = c.curl_easy_setopt(curl, c.CURLoption.CURLOPT_URL, @ptrCast([*:0]const u8, url));
+            _ = c.curl_easy_setopt(curl, c.CURLOPT_URL, @ptrCast([*:0]const u8, url));
 
             // body
-            _ = c.curl_easy_setopt(curl, c.CURLoption.CURLOPT_POSTFIELDSIZE, tx.data.items.len);
-            _ = c.curl_easy_setopt(curl, c.CURLoption.CURLOPT_POST, @as(c_int, 1));
-            _ = c.curl_easy_setopt(curl, c.CURLoption.CURLOPT_POSTFIELDS, @ptrCast([*:0]const u8, tx.data.items));
+            _ = c.curl_easy_setopt(curl, c.CURLOPT_POSTFIELDSIZE, tx.data.items.len);
+            _ = c.curl_easy_setopt(curl, c.CURLOPT_POST, @as(c_int, 1));
+            _ = c.curl_easy_setopt(curl, c.CURLOPT_POSTFIELDS, @ptrCast([*:0]const u8, tx.data.items));
 
             // http headers
             headers = c.curl_slist_append(headers, "Content-Type: application/json");
             headers = c.curl_slist_append(headers, @ptrCast([*:0]const u8, apikeyHeader));
-            _ = c.curl_easy_setopt(curl, c.CURLoption.CURLOPT_HTTPHEADER, headers);
+            _ = c.curl_easy_setopt(curl, c.CURLOPT_HTTPHEADER, headers);
 
             // perform the call
             res = c.curl_easy_perform(curl);
-            if (@enumToInt(res) != @bitCast(c_uint, c.CURLE_OK)) {
+            if (res != @bitCast(c_uint, c.CURLE_OK)) {
                 _ = c.printf("curl_easy_perform() failed: %s\n", c.curl_easy_strerror(res));
                 failed = true;
             }
@@ -245,7 +245,7 @@ pub const Forwarder = struct {
         if (failed) {
             return ForwarderError.RequestFailed;
         } else {
-            std.debug.warn("http flush done, request payload size: {}\n", .{tx.data.items.len});
+            std.log.debug("http flush done, request payload size: {}", .{tx.data.items.len});
         }
     }
 };

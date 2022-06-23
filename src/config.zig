@@ -15,19 +15,19 @@ pub const Config = struct {
     pub fn read() ConfigError!Config {
         var apikey = std.os.getenv("APIKEY");
         if (apikey == null) {
-            std.debug.warn("APIKEY should be set!\n", .{});
+            std.log.err("APIKEY should be set!", .{});
             return ConfigError.MissingApikey;
         }
 
         var hostname = std.os.getenv("HOSTNAME");
         if (hostname == null) {
-            std.debug.warn("HOSTNAME should be set!\n", .{});
+            std.log.err("HOSTNAME should be set!", .{});
             return ConfigError.MissingHostname;
         }
 
         var max_mem_value: u32 = 256;
         if (std.os.getenv("MAX_MEM_MB")) |value| {
-            var parsed_value = std.fmt.parseInt(u32, value, 10) catch |err| {
+            var parsed_value = std.fmt.parseInt(u32, value, 10) catch {
                 return ConfigError.MalformedMaxMemMB;
             };
             max_mem_value = parsed_value;

@@ -1,5 +1,4 @@
 const std = @import("std");
-const warn = std.debug.warn;
 const os = std.os;
 
 const ThreadContext = @import("main.zig").ThreadContext;
@@ -11,23 +10,23 @@ pub const Packet = struct {
 
 fn open_socket_udp() !i32 {
     var sockfd: i32 = try os.socket(
-        os.AF_INET,
-        os.SOCK_DGRAM | os.SOCK_CLOEXEC | os.SOCK_NONBLOCK,
+        os.AF.INET,
+        os.SOCK.DGRAM | os.SOCK.CLOEXEC | os.SOCK.NONBLOCK,
         0,
     );
     var addr: std.net.Address = try std.net.Address.parseIp4("127.0.0.1", 8125);
-    try os.bind(sockfd, &addr.any, @sizeOf(os.sockaddr_in));
+    try os.bind(sockfd, &addr.any, @sizeOf(os.sockaddr.in));
     return sockfd;
 }
 
 fn open_socket_uds() !i32 {
     var sockfd: i32 = try os.socket(
-        os.AF_UNIX,
-        os.SOCK_DGRAM | os.SOCK_CLOEXEC | os.SOCK_NONBLOCK,
+        os.AF.UNIX,
+        os.SOCK.DGRAM | os.SOCK.CLOEXEC | os.SOCK.NONBLOCK,
         0,
     );
     var addr: std.net.Address = try std.net.Address.initUnix("statsd.sock");
-    try os.bind(sockfd, &addr.any, @sizeOf(os.sockaddr_in));
+    try os.bind(sockfd, &addr.any, @sizeOf(os.sockaddr.in));
     return sockfd;
 }
 
@@ -36,10 +35,10 @@ pub fn listener(context: *ThreadContext) !void {
 
     if (context.uds) {
         sockfd = try open_socket_uds();
-        warn("starting the listener on statsd.sock\n", .{});
+        std.log.info("starting the listener on statsd.sock", .{});
     } else {
         sockfd = try open_socket_udp();
-        warn("starting the listener on localhost:8125\n", .{});
+        std.log.info("starting the listener on localhost:8125", .{});
     }
 
     // reading buffer
@@ -75,7 +74,7 @@ pub fn listener(context: *ThreadContext) !void {
         const tmp = std.time.milliTimestamp() - last_drop_message;
         if (tmp > 10000) {
             last_drop_message = std.time.milliTimestamp();
-            warn("drops: {}/s\n", .{@divTrunc(drops, @divTrunc(tmp, 1000))});
+            std.log.info("drops: {}/s", .{@divTrunc(drops, @divTrunc(tmp, 1000))});
             drops = 0;
         }
     }

@@ -1,6 +1,6 @@
 const std = @import("std");
 const mem = std.mem;
-const warn = std.debug.warn;
+const warn = std.log.warn;
 const fnv1a = std.hash.Fnv1a_64;
 const assert = std.debug.assert;
 
@@ -20,11 +20,11 @@ pub const Sample = struct {
 
 pub const Sampler = struct {
     map: std.AutoHashMap(u64, Sample),
-    allocator: *std.mem.Allocator,
+    allocator: std.mem.Allocator,
     mutex: std.Thread.Mutex,
     forwarder: Forwarder,
 
-    pub fn init(allocator: *std.mem.Allocator) !*Sampler {
+    pub fn init(allocator: std.mem.Allocator) !*Sampler {
         var rv = try allocator.create(Sampler);
         rv.map = std.AutoHashMap(u64, Sample).init(allocator);
         rv.allocator = allocator;
@@ -55,16 +55,17 @@ pub const Sampler = struct {
                     newSample.value += m.value;
                 },
             }
-            var held = self.mutex.acquire();
+            self.mutex.lock();
+            defer self.mutex.unlock();
             _ = try self.map.put(h, newSample);
-            held.release();
             return;
         }
 
         // not existing, put it in the sampler
         var name = try self.allocator.alloc(u8, m.name.len);
         std.mem.copy(u8, name, m.name);
-        var held = self.mutex.acquire();
+        self.mutex.lock();
+        defer self.mutex.unlock();
         _ = try self.map.put(h, Sample{
             .metric_name = name,
             .metric_type = m.type,
@@ -72,7 +73,6 @@ pub const Sampler = struct {
             .tags = m.tags,
             .value = m.value,
         });
-        held.release();
     }
 
     pub fn size(self: *Sampler) usize {
@@ -80,7 +80,8 @@ pub const Sampler = struct {
     }
 
     pub fn flush(self: *Sampler, config: Config) !void {
-        var held = self.mutex.acquire();
+        self.mutex.lock();
+        defer self.mutex.unlock();
 
         try self.forwarder.flush(self.allocator, config, &self.map);
 
@@ -91,8 +92,6 @@ pub const Sampler = struct {
         }
         self.map.deinit();
         self.map = std.AutoHashMap(u64, Sample).init(self.allocator);
-
-        held.release();
     }
 
     /// destroy frees all the memory used by the Sampler and the instance itself.
@@ -113,7 +112,7 @@ pub const Sampler = struct {
         var it = self.map.iterator();
         while (it.next()) |kv| {
             const s = kv.*.value;
-            warn("{d}: {} ({c}): {d}\n", .{ kv.*.key, s.metric_name, s.metric_type, s.value });
+            std.log.debug("{d}: {} ({c}): {d}", .{ kv.*.key, s.metric_name, s.metric_type, s.value });
         }
     }
 
@@ -165,7 +164,7 @@ test "sampling hashing" {
     assert(Sampler.size(sampler) == 2);
 
     var other_tags = try Parser.parse_tags(std.testing.allocator, "#my:tag,second:tag,and:other");
-    var m4 = metric.Metric{ // different because it has other tags
+    metric.Metric{ // different because it has other tags
         .name = "this.is.my.other.metric",
         .value = 25.0,
         .type = metric.MetricTypeCounter,
