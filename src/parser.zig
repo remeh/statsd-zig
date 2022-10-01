@@ -50,6 +50,10 @@ pub const Parser = struct {
         errdefer rv.deinit();
 
         while (part != null) {
+            if (part.?.len == 0) {
+                part = iterator.next();
+                continue;
+            }
             var m: metric.Metric = try parse_metric(allocator, part.?);
             _ = try rv.append(m);
             part = iterator.next();

@@ -89,7 +89,7 @@ pub fn main() !void {
                     i += 1;
                 }
             } else |err| {
-                std.log.err("can't parse packet: {s}", .{err});
+                std.log.err("can't parse packet: {}", .{err});
                 std.log.err("packet: {s}", .{node.data.payload});
             }
 
@@ -111,7 +111,7 @@ pub fn main() !void {
 
         if (std.time.milliTimestamp() > next_flush) {
             sampler.flush(config) catch |err| {
-                std.log.err("can't flush: {s}", .{err});
+                std.log.err("can't flush: {}", .{err});
             };
 
             std.log.info("packets parsed: {d}/s", .{@divTrunc(packets_parsed, (flush_frequency / 1000))});

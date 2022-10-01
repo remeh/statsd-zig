@@ -1,6 +1,5 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const warn = std.log.warn;
 const assert = @import("std").debug.assert;
 
 /// MeasureAllocator is counting how much bytes were succesfully allocated with

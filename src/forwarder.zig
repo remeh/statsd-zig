@@ -6,7 +6,7 @@ const Config = @import("config.zig").Config;
 const metric = @import("metric.zig");
 
 //const endpoint = "https://agent.datadoghq.com/api/v1/series";
-const endpoint = "http://localhost:8001";
+const endpoint = "http://localhost:8080";
 
 const max_retry_per_transaction = 5;
 // TODO(remy): instead of limiting on the amount of transactions, we could limit
@@ -62,7 +62,7 @@ pub const Forwarder = struct {
 
             // try to send the transaction
             send_http_request(allocator, config, tx) catch |err| {
-                std.log.warn("can't send a transaction: {s}\nstoring the transaction of size {d} bytes [{s}]", .{ err, tx.data.items.len, tx.data.items });
+                std.log.warn("can't send a transaction: {}\nstoring the transaction of size {d} bytes [{s}]", .{ err, tx.data.items.len, tx.data.items });
 
                 // limit the amount of transactions stored
                 if (self.transactions.items.len > max_stored_transactions) {
@@ -72,7 +72,7 @@ pub const Forwarder = struct {
                 }
 
                 self.transactions.append(tx) catch |err2| {
-                    std.log.warn("can't store the failing transaction {s}", .{err2});
+                    std.log.warn("can't store the failing transaction {}", .{err2});
                     tx.deinit();
                 };
                 return;
@@ -121,12 +121,12 @@ pub const Forwarder = struct {
             }
             var tx = self.transactions.orderedRemove(0);
             send_http_request(allocator, config, tx) catch |err| {
-                std.log.warn("error while retrying a transaction: {s}", .{err});
+                std.log.warn("error while retrying a transaction: {}", .{err});
                 if (tx.tries < max_retry_per_transaction) {
                     tx.tries += 1;
                     self.transactions.append(tx) catch |err2| {
                         tx.deinit();
-                        std.log.err("can't store the failing transaction {s}", .{err2});
+                        std.log.err("can't store the failing transaction {}", .{err2});
                     };
                 } else {
                     tx.deinit();
