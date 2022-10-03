@@ -121,6 +121,8 @@ pub fn main() !void {
 
             next_flush = std.time.milliTimestamp() + flush_frequency;
         }
+
+        // std.os.nanosleep(0, 100 * 1000 * 1000);
     }
 
     // TODO(remy): delete the socket

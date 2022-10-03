@@ -48,8 +48,24 @@ pub fn listener(context: *ThreadContext) !void {
     var drops: i64 = 0;
     var last_drop_message = std.time.milliTimestamp();
 
+    // epoll
+    var epfd = std.os.linux.epoll_create();
+    var epev = std.os.linux.epoll_event{
+        .events = std.os.linux.EPOLL.IN | std.os.linux.EPOLL.PRI | std.os.linux.EPOLL.ERR | std.os.linux.EPOLL.HUP,
+        .data = std.os.linux.epoll_data{ .fd = sockfd },
+    };
+    try std.os.epoll_ctl(
+        @intCast(i32, epfd),
+        std.os.linux.EPOLL.CTL_ADD,
+        sockfd,
+        &epev,
+    );
+    errdefer std.os.linux.close(epfd);
+
     while (true) {
-        std.os.nanosleep(0, 100 * 1000 * 1000);
+        var events: [10]os.linux.epoll_event = undefined;
+        _ = std.os.linux.epoll_wait(@intCast(i32, epfd), events[0..], 10, -1);
+        // std.log.info("epoll events count: {d}", .{events_count});
 
         const rlen = os.recvfrom(sockfd, buf, 0, null, null) catch {
             continue;
