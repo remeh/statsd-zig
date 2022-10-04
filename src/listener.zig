@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const os = std.os;
 
 const ThreadContext = @import("main.zig").ThreadContext;
@@ -30,7 +31,7 @@ fn open_socket_uds() !i32 {
     return sockfd;
 }
 
-pub fn listener(context: *ThreadContext) !void {
+fn open_socket(context: *ThreadContext) !i32 {
     var sockfd: i32 = 0;
 
     if (context.uds) {
@@ -41,6 +42,12 @@ pub fn listener(context: *ThreadContext) !void {
         std.log.info("starting the listener on localhost:8125", .{});
     }
 
+    return sockfd;
+}
+
+pub fn listener(context: *ThreadContext) !void {
+    var sockfd: i32 = try open_socket(context);
+
     // reading buffer
     var array: [8192]u8 = undefined;
     var buf: []u8 = &array;
@@ -48,31 +55,54 @@ pub fn listener(context: *ThreadContext) !void {
     var drops: i64 = 0;
     var last_drop_message = std.time.milliTimestamp();
 
-    // epoll
-    var epfd = std.os.linux.epoll_create();
-    var epev = std.os.linux.epoll_event{
-        .events = std.os.linux.EPOLL.IN | std.os.linux.EPOLL.PRI | std.os.linux.EPOLL.ERR | std.os.linux.EPOLL.HUP,
-        .data = std.os.linux.epoll_data{ .fd = sockfd },
-    };
-    try std.os.epoll_ctl(
-        @intCast(i32, epfd),
-        std.os.linux.EPOLL.CTL_ADD,
-        sockfd,
-        &epev,
-    );
-    errdefer std.os.linux.close(epfd);
+    // initialization
+    var epfd: usize = undefined;
 
+    switch (builtin.os.tag) {
+        .linux => {
+            // epoll
+            std.log.info("using epoll", .{});
+            epfd = std.os.linux.epoll_create();
+            var epev = std.os.linux.epoll_event{
+                .events = std.os.linux.EPOLL.IN | std.os.linux.EPOLL.PRI | std.os.linux.EPOLL.ERR | std.os.linux.EPOLL.HUP,
+                .data = std.os.linux.epoll_data{ .fd = sockfd },
+            };
+            try std.os.epoll_ctl(
+                @intCast(i32, epfd),
+                std.os.linux.EPOLL.CTL_ADD,
+                sockfd,
+                &epev,
+            );
+            errdefer std.os.linux.close(epfd);
+        },
+        .netbsd, .openbsd, .macos => {
+            // TODO(remy): kqueue implementation
+        },
+        else => {},
+    }
+
+    // process loop
     while (true) {
-        var events: [10]os.linux.epoll_event = undefined;
-        _ = std.os.linux.epoll_wait(@intCast(i32, epfd), events[0..], 10, -1);
-        // std.log.info("epoll events count: {d}", .{events_count});
+        switch (builtin.os.tag) {
+            .linux => {
+                var events: [10]os.linux.epoll_event = undefined;
+                _ = std.os.linux.epoll_wait(@intCast(i32, epfd), events[0..], 10, -1);
+                // std.log.info("epoll events count: {d}", .{events_count});
+            },
+            .netbsd, .openbsd, .macos => {
+                // TODO(remy): kqueue implementation
+            },
+            else => std.os.nanosleep(0, 1 * 1000 * 1000),
+        }
 
         const rlen = os.recvfrom(sockfd, buf, 0, null, null) catch {
             continue;
         };
+
         if (rlen == 0) {
             continue;
         }
+
         if (context.b.isEmpty()) {
             drops += 1;
             // no more pre-allocated buffers available, this packet will be dropped.
