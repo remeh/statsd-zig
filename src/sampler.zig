@@ -180,12 +180,6 @@ test "sampling hashing" {
     assert(Sampler.size(sampler) == 2);
 
     var other_tags = try Parser.parse_tags(std.testing.allocator, "#my:tag,second:tag,and:other");
-    metric.Metric{ // different because it has other tags
-        .name = "this.is.my.other.metric",
-        .value = 25.0,
-        .type = metric.MetricTypeCounter,
-        .tags = tags,
-    };
 
     sampler.deinit();
     tags.deinit();
@@ -206,7 +200,7 @@ test "sampling gauge" {
 
     var iterator = sampler.map.iterator();
     if (iterator.next()) |kv| {
-        const sample = kv.value_ptr.*.value;
+        const sample = kv.value_ptr.*;
         assert(sample.value == 50.0);
     }
 
@@ -215,7 +209,7 @@ test "sampling gauge" {
     try Sampler.sample(sampler, m);
     iterator = sampler.map.iterator();
     if (iterator.next()) |kv| {
-        const sample = kv.*.value;
+        const sample = kv.value_ptr.*;
         assert(sample.value == 20.0);
     }
 
@@ -236,7 +230,7 @@ test "sampling counter" {
 
     var iterator = sampler.map.iterator();
     if (iterator.next()) |kv| {
-        const sample = kv.value_ptr.*.value;
+        const sample = kv.value_ptr.*;
         assert(sample.value == 50.0);
         assert(sample.samples == 1);
     }
@@ -246,7 +240,7 @@ test "sampling counter" {
     try Sampler.sample(sampler, m);
     iterator = sampler.map.iterator();
     if (iterator.next()) |kv| {
-        const sample = kv.*.value;
+        const sample = kv.value_ptr.*;
         assert(sample.value == 70.0);
         assert(sample.samples == 2);
     }

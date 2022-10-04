@@ -260,12 +260,14 @@ test "transaction_mem_usage" {
         .metric_type = metric.MetricTypeGauge,
         .samples = 1,
         .value = 1,
+        .tags = metric.Tags.init(allocator),
     };
 
     var config = Config{
         .hostname = "local",
         .apikey = "abcdef",
         .max_mem_mb = 20000,
+        .uds = false,
     };
 
     var samples = std.AutoHashMap(u64, Sample).init(allocator);
@@ -294,12 +296,14 @@ test "write_sample_test" {
         .metric_type = metric.MetricTypeGauge,
         .samples = 1,
         .value = 1,
+        .tags = metric.Tags.init(allocator),
     };
 
     var config = Config{
         .hostname = "local",
         .apikey = "abcdef",
         .max_mem_mb = 20000,
+        .uds = false,
     };
 
     try Forwarder.write_sample(allocator, config, tx, sample);
