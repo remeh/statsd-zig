@@ -62,7 +62,15 @@ pub const Sampler = struct {
         }
 
         // not existing, put it in the sampler
+
         var name = try self.allocator.alloc(u8, m.name.len);
+        var tags = metric.Tags.init(self.allocator);
+        for (m.tags.items) |tag| {
+            var tag_copy = try self.allocator.alloc(u8, tag.len);
+            std.mem.copy(u8, tag_copy, tag);
+            try tags.append(tag_copy);
+        }
+
         std.mem.copy(u8, name, m.name);
         self.mutex.lock();
         defer self.mutex.unlock();
@@ -70,7 +78,7 @@ pub const Sampler = struct {
             .metric_name = name,
             .metric_type = m.type,
             .samples = 1,
-            .tags = m.tags,
+            .tags = tags,
             .value = m.value,
         });
     }
@@ -85,10 +93,14 @@ pub const Sampler = struct {
 
         try self.forwarder.flush(self.allocator, config, &self.map);
 
-        // release the memory used for all metrics names and reset the map
+        // release the memory used for all metrics names, tags and reset the map
         var it = self.map.iterator();
         while (it.next()) |kv| {
             self.allocator.free(kv.value_ptr.*.metric_name);
+            for (kv.value_ptr.*.tags.items) |tag| {
+                self.allocator.free(tag);
+            }
+            kv.value_ptr.*.tags.deinit();
         }
         self.map.deinit();
         self.map = std.AutoHashMap(u64, Sample).init(self.allocator);
@@ -100,7 +112,11 @@ pub const Sampler = struct {
         // release the memory used for all metrics names
         var it = self.map.iterator();
         while (it.next()) |kv| {
-            self.allocator.free(kv.*.value.metric_name);
+            self.allocator.free(kv.value_ptr.*.metric_name);
+            for (kv.value_ptr.*.tags.items) |tag| {
+                self.allocator.free(tag);
+            }
+            kv.value_ptr.*.tags.deinit();
         }
         self.forwarder.deinit();
         self.map.deinit();
@@ -190,7 +206,7 @@ test "sampling gauge" {
 
     var iterator = sampler.map.iterator();
     if (iterator.next()) |kv| {
-        const sample = kv.*.value;
+        const sample = kv.value_ptr.*.value;
         assert(sample.value == 50.0);
     }
 
@@ -220,7 +236,7 @@ test "sampling counter" {
 
     var iterator = sampler.map.iterator();
     if (iterator.next()) |kv| {
-        const sample = kv.*.value;
+        const sample = kv.value_ptr.*.value;
         assert(sample.value == 50.0);
         assert(sample.samples == 1);
     }
