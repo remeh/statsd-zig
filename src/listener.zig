@@ -56,7 +56,11 @@ pub fn listener(context: *ThreadContext) !void {
     var last_drop_message = std.time.milliTimestamp();
 
     // initialization
+    // epoll
     var epfd: usize = undefined;
+    // kqueue
+    var kq: i32 = undefined;
+    var kev: std.os.Kevent = undefined;
 
     switch (builtin.os.tag) {
         .linux => {
@@ -76,7 +80,18 @@ pub fn listener(context: *ThreadContext) !void {
             errdefer std.os.linux.close(epfd);
         },
         .netbsd, .openbsd, .macos => {
-            // TODO(remy): kqueue implementation
+            std.log.info("using kqueue", .{});
+            kq = try std.os.kqueue();
+            errdefer std.os.close(kq);
+            kev = std.os.Kevent{
+                .ident = 1,
+                .filter = os.system.EVFILT_TIMER,
+                .flags = os.system.EV_CLEAR | os.system.EV_ADD | os.system.EV_DISABLE | os.system.EV_ONESHOT,
+                .fflags = 0,
+                .data = 0,
+                .udata = undefined,
+                // .udata = @ptrToInt(&eventfd_node.data.base),
+            };
         },
         else => {},
     }
@@ -91,6 +106,9 @@ pub fn listener(context: *ThreadContext) !void {
             },
             .netbsd, .openbsd, .macos => {
                 // TODO(remy): kqueue implementation
+                const empty_kevs = &[0]os.Kevent{};
+                const kevent_array = @as(*const [1]os.Kevent, &kev);
+                _ = try std.os.kevent(kq, kevent_array, empty_kevs, null);
             },
             else => std.os.nanosleep(0, 1 * 1000 * 1000),
         }
@@ -120,7 +138,7 @@ pub fn listener(context: *ThreadContext) !void {
         const tmp = std.time.milliTimestamp() - last_drop_message;
         if (tmp > 10000) {
             last_drop_message = std.time.milliTimestamp();
-            std.log.info("drops: {}/s", .{@divTrunc(drops, @divTrunc(tmp, 1000))});
+            std.log.info("listener drops: {d}/s ({d} last {d}s)", .{ @divTrunc(drops, @divTrunc(tmp, 1000)), drops, 10 });
             drops = 0;
         }
     }

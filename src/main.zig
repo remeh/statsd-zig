@@ -36,7 +36,7 @@ pub fn main() !void {
     var i: usize = 0;
 
     // TODO(remy): add a knob here
-    while (i < 4096) {
+    while (i < 4096 * 8) {
         var packet_node: *Queue(Packet).Node = try std.heap.page_allocator.create(Queue(Packet).Node);
         packet_node.data = Packet{
             .payload = try std.heap.page_allocator.alloc(u8, 8192),
@@ -114,8 +114,8 @@ pub fn main() !void {
                 std.log.err("can't flush: {}", .{err});
             };
 
-            std.log.info("packets parsed: {d}/s", .{@divTrunc(packets_parsed, (flush_frequency / 1000))});
-            std.log.info("metrics parsed: {d}/s", .{@divTrunc(metrics_parsed, (flush_frequency / 1000))});
+            std.log.info("packets parsed: {d}/s ({d} last {d}s)", .{ @divTrunc(packets_parsed, (flush_frequency / 1000)), packets_parsed, flush_frequency / 1000 });
+            std.log.info("metrics parsed: {d}/s ({d} last {d}s)", .{ @divTrunc(metrics_parsed, (flush_frequency / 1000)), metrics_parsed, flush_frequency / 1000 });
             packets_parsed = 0;
             metrics_parsed = 0;
 
