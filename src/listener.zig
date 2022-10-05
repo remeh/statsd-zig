@@ -60,7 +60,10 @@ pub fn listener(context: *ThreadContext) !void {
     var epfd: usize = undefined;
     // kqueue
     var kq: i32 = undefined;
-    var kev: std.os.Kevent = undefined;
+    var kev: switch (builtin.os.tag) {
+        .macos => std.os.Kevent,
+        else => usize,
+    } = undefined;
 
     switch (builtin.os.tag) {
         .linux => {
@@ -110,7 +113,7 @@ pub fn listener(context: *ThreadContext) !void {
                 const kevent_array = @as(*const [1]os.Kevent, &kev);
                 _ = try std.os.kevent(kq, kevent_array, empty_kevs, null);
             },
-            else => std.os.nanosleep(0, 1 * 1000 * 1000),
+            else => {},
         }
 
         const rlen = os.recvfrom(sockfd, buf, 0, null, null) catch {

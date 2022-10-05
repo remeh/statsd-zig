@@ -36,7 +36,7 @@ pub fn main() !void {
     var i: usize = 0;
 
     // TODO(remy): add a knob here
-    while (i < 4096 * 8) {
+    while (i < 4096) {
         var packet_node: *Queue(Packet).Node = try std.heap.page_allocator.create(Queue(Packet).Node);
         packet_node.data = Packet{
             .payload = try std.heap.page_allocator.alloc(u8, 8192),
@@ -121,8 +121,6 @@ pub fn main() !void {
 
             next_flush = std.time.milliTimestamp() + flush_frequency;
         }
-
-        // std.os.nanosleep(0, 100 * 1000 * 1000);
     }
 
     // TODO(remy): delete the socket
