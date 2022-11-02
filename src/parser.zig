@@ -51,7 +51,7 @@ pub const Parser = struct {
 
         while (part != null) {
             var m: metric.Metric = try parse_metric(allocator, part.?);
-            _ = try rv.append(m);
+            try rv.append(m);
             part = iterator.next();
         }
 
@@ -120,7 +120,7 @@ pub const Parser = struct {
         var iterator = std.mem.split(u8, buffer[1..buffer.len], ",");
         var part: ?[]const u8 = iterator.next();
         while (part != null) {
-            _ = try rv.append(part.?);
+            try rv.append(part.?);
             part = iterator.next();
         }
 
