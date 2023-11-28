@@ -57,7 +57,7 @@ pub const Sampler = struct {
             }
             self.mutex.lock();
             defer self.mutex.unlock();
-            _ = try self.map.put(h, newSample);
+            try self.map.put(h, newSample);
             return;
         }
 
@@ -74,7 +74,7 @@ pub const Sampler = struct {
         std.mem.copy(u8, name, m.name);
         self.mutex.lock();
         defer self.mutex.unlock();
-        _ = try self.map.put(h, Sample{
+        try self.map.put(h, Sample{
             .metric_name = name,
             .metric_type = m.type,
             .samples = 1,
