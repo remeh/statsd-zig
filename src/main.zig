@@ -37,6 +37,7 @@ pub fn main() !void {
 
     // TODO(remy): add a knob here
     while (i < 4096) {
+        // TODO(remy): use the GPA
         var packet_node: *Queue(Packet).Node = try std.heap.page_allocator.create(Queue(Packet).Node);
         packet_node.data = Packet{
             .payload = try std.heap.page_allocator.alloc(u8, 8192),

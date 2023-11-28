@@ -19,23 +19,30 @@ pub fn MeasureAllocator() type {
         }
 
         pub fn allocator(self: *Self) Allocator {
-            return Allocator.init(self, alloc, resize, free);
+            return .{
+                .ptr = self,
+                .vtable = &.{
+                    .alloc = alloc,
+                    .resize = resize,
+                    .free = free,
+                },
+            };
         }
 
-        fn alloc(self: *Self, len: usize, ptr_align: u29, len_align: u29, ret_len: usize) std.mem.Allocator.Error![]u8 {
-            const result = self.parent_allocator.rawAlloc(len, ptr_align, len_align, ret_len);
-            if (result) |_| {
+        fn alloc(ctx: *anyopaque, len: usize, ptr_align: u8, ret_len: usize) ?[*]u8 {
+            const self: *Self = @ptrCast(@alignCast(ctx));
+            const result = self.parent_allocator.rawAlloc(len, ptr_align, ret_len);
+            if (result != null) {
                 self.allocated += len;
-            } else |err| {
-                return err;
             }
             return result;
         }
 
-        fn resize(self: *Self, buf: []u8, buf_align: u29, new_len: usize, len_align: u29, ret_len: usize) ?usize {
+        fn resize(ctx: *anyopaque, buf: []u8, buf_align: u8, new_len: usize, ret_len: usize) bool {
+            const self: *Self = @ptrCast(@alignCast(ctx));
             var old_len: usize = buf.len;
-            const result = self.parent_allocator.rawResize(buf, buf_align, new_len, len_align, ret_len);
-            if (result) |_| {
+            const result = self.parent_allocator.rawResize(buf, buf_align, new_len, ret_len);
+            if (result) {
                 if (old_len < new_len) {
                     self.allocated += new_len - old_len;
                 }
@@ -43,7 +50,8 @@ pub fn MeasureAllocator() type {
             return result;
         }
 
-        fn free(self: *Self, buf: []u8, buf_align: u29, ra: usize) void {
+        fn free(ctx: *anyopaque, buf: []u8, buf_align: u8, ra: usize) void {
+            const self: *Self = @ptrCast(@alignCast(ctx));
             self.parent_allocator.rawFree(buf, buf_align, ra);
             self.allocated -= buf.len;
         }

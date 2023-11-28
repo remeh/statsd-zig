@@ -75,7 +75,7 @@ pub fn listener(context: *ThreadContext) !void {
                 .data = std.os.linux.epoll_data{ .fd = sockfd },
             };
             try std.os.epoll_ctl(
-                @intCast(i32, epfd),
+                @as(i32, @intCast(epfd)),
                 std.os.linux.EPOLL.CTL_ADD,
                 sockfd,
                 &epev,
@@ -104,7 +104,7 @@ pub fn listener(context: *ThreadContext) !void {
         switch (builtin.os.tag) {
             .linux => {
                 var events: [10]os.linux.epoll_event = undefined;
-                _ = std.os.linux.epoll_wait(@intCast(i32, epfd), events[0..], 10, -1);
+                _ = std.os.linux.epoll_wait(@as(i32, @intCast(epfd)), events[0..], 10, -1);
                 // std.log.info("epoll events count: {d}", .{events_count});
             },
             .netbsd, .openbsd, .macos => {

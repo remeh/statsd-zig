@@ -215,21 +215,21 @@ pub const Forwarder = struct {
         curl = c.curl_easy_init();
         if (curl != null) {
             // url
-            _ = c.curl_easy_setopt(curl, c.CURLOPT_URL, @ptrCast([*:0]const u8, url));
+            _ = c.curl_easy_setopt(curl, c.CURLOPT_URL, @as([*:0]const u8, @ptrCast(url)));
 
             // body
             _ = c.curl_easy_setopt(curl, c.CURLOPT_POSTFIELDSIZE, tx.data.items.len);
             _ = c.curl_easy_setopt(curl, c.CURLOPT_POST, @as(c_int, 1));
-            _ = c.curl_easy_setopt(curl, c.CURLOPT_POSTFIELDS, @ptrCast([*:0]const u8, tx.data.items));
+            _ = c.curl_easy_setopt(curl, c.CURLOPT_POSTFIELDS, @as([*:0]const u8, @ptrCast(tx.data.items)));
 
             // http headers
             headers = c.curl_slist_append(headers, "Content-Type: application/json");
-            headers = c.curl_slist_append(headers, @ptrCast([*:0]const u8, apikeyHeader));
+            headers = c.curl_slist_append(headers, @as([*:0]const u8, @ptrCast(apikeyHeader)));
             _ = c.curl_easy_setopt(curl, c.CURLOPT_HTTPHEADER, headers);
 
             // perform the call
             res = c.curl_easy_perform(curl);
-            if (res != @bitCast(c_uint, c.CURLE_OK)) {
+            if (res != @as(c_uint, @bitCast(c.CURLE_OK))) {
                 _ = c.printf("curl_easy_perform() failed: %s\n", c.curl_easy_strerror(res));
                 failed = true;
             }

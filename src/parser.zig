@@ -129,7 +129,7 @@ pub const Parser = struct {
         }
 
         var tags = rv.items;
-        std.sort.insertionSort([]const u8, tags, {}, lessThanTags);
+        std.sort.insertion([]const u8, tags, {}, lessThanTags);
 
         return rv;
     }
