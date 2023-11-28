@@ -6,7 +6,7 @@ metrics to Datadog.
 ## Getting started
 
 - `libcurl` must be available on the system
-- Build the binary with `zig build` (build with Zig `0.9.1`)
+- Build the binary with `zig build` (build with Zig `0.11.0`)
 - Set the environment variables `APIKEY` and `HOSTNAME` to configure the daemon
 
 ### With UDP
