@@ -251,7 +251,7 @@ pub const Forwarder = struct {
 test "transaction_mem_usage" {
     const allocator = std.testing.allocator;
     const name = try allocator.alloc(u8, "my.metric".len);
-    std.mem.copy(u8, name, "my.metric");
+    std.mem.copyForwards(u8, name, "my.metric");
 
     const sample = Sample{
         .metric_name = name,
@@ -287,7 +287,7 @@ test "write_sample_test" {
     var tx = try Transaction.init(allocator, 0);
 
     const name = try allocator.alloc(u8, "my.metric".len);
-    std.mem.copy(u8, name, "my.metric");
+    std.mem.copyForwards(u8, name, "my.metric");
 
     const sample = Sample{
         .metric_name = name,

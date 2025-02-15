@@ -57,14 +57,13 @@ pub const MeasureAllocator = struct {
 
 test "measure allocator counter and memory leak" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    var measure_allocator = MeasureAllocator().init(&arena.allocator);
+    var measure_allocator = MeasureAllocator.init(arena.allocator());
 
     var loop_count: u32 = 0;
     var alloc_count: u32 = 0;
     var reset_count: u32 = 0;
     while (loop_count < 1024) {
-        const data = try measure_allocator.allocator.alloc(u8, 8192);
-        measure_allocator.allocator.free(data); // is actually not freeing anything
+        _ = try measure_allocator.allocator().alloc(u8, 8192);
         assert(measure_allocator.allocated == (8192 * (alloc_count + 1)));
         alloc_count += 1;
         loop_count += 1;
@@ -72,13 +71,12 @@ test "measure allocator counter and memory leak" {
         if (measure_allocator.allocated > 15000) {
             arena.deinit();
             arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-            measure_allocator = MeasureAllocator().init(&arena.allocator);
+            measure_allocator = MeasureAllocator.init(arena.allocator());
             reset_count += 1;
             alloc_count = 0;
         }
     }
 
     assert(reset_count == 1024 / 2); // it should reset every 2 runs
-
     arena.deinit(); // is freeing all the data
 }
