@@ -68,14 +68,14 @@ pub fn listener(context: *ThreadContext) !void {
         .linux => {
             // epoll
             std.log.info("using epoll", .{});
-            epfd = std.posix.linux.epoll_create();
-            var epev = std.posix.linux.epoll_event{
-                .events = std.posix.linux.EPOLL.IN | std.posix.linux.EPOLL.PRI | std.posix.linux.EPOLL.ERR | std.posix.linux.EPOLL.HUP,
-                .data = std.posix.linux.epoll_data{ .fd = sockfd },
+            epfd = std.os.linux.epoll_create();
+            var epev = std.os.linux.epoll_event{
+                .events = std.os.linux.EPOLL.IN | std.os.linux.EPOLL.PRI | std.os.linux.EPOLL.ERR | std.os.linux.EPOLL.HUP,
+                .data = std.os.linux.epoll_data{ .fd = sockfd },
             };
             try std.posix.epoll_ctl(
                 @as(i32, @intCast(epfd)),
-                std.posix.linux.EPOLL.CTL_ADD,
+                std.os.linux.EPOLL.CTL_ADD,
                 sockfd,
                 &epev,
             );
@@ -102,8 +102,8 @@ pub fn listener(context: *ThreadContext) !void {
     while (true) {
         switch (builtin.os.tag) {
             .linux => {
-                var events: [10]std.posix.linux.epoll_event = undefined;
-                _ = std.posix.linux.epoll_wait(@as(i32, @intCast(epfd)), events[0..], 10, -1);
+                var events: [10]std.os.linux.epoll_event = undefined;
+                _ = std.os.linux.epoll_wait(@as(i32, @intCast(epfd)), events[0..], 10, -1);
                 // std.log.info("epoll events count: {d}", .{events_count});
             },
             .netbsd, .openbsd, .macos => {
