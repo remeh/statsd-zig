@@ -13,28 +13,28 @@ pub const Config = struct {
     uds: bool,
 
     pub fn read() ConfigError!Config {
-        var apikey = std.os.getenv("APIKEY");
+        const apikey = std.posix.getenv("APIKEY");
         if (apikey == null) {
             std.log.err("APIKEY should be set!", .{});
             return ConfigError.MissingApikey;
         }
 
-        var hostname = std.os.getenv("HOSTNAME");
+        const hostname = std.posix.getenv("HOSTNAME");
         if (hostname == null) {
             std.log.err("HOSTNAME should be set!", .{});
             return ConfigError.MissingHostname;
         }
 
         var max_mem_value: u32 = 256;
-        if (std.os.getenv("MAX_MEM_MB")) |value| {
-            var parsed_value = std.fmt.parseInt(u32, value, 10) catch {
+        if (std.posix.getenv("MAX_MEM_MB")) |value| {
+            const parsed_value = std.fmt.parseInt(u32, value, 10) catch {
                 return ConfigError.MalformedMaxMemMB;
             };
             max_mem_value = parsed_value;
         }
 
         var uds: bool = false;
-        if (std.os.getenv("UDS") != null) {
+        if (std.posix.getenv("UDS") != null) {
             uds = true;
         }
 

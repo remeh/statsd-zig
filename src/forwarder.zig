@@ -5,8 +5,8 @@ const Sample = @import("sampler.zig").Sample;
 const Config = @import("config.zig").Config;
 const metric = @import("metric.zig");
 
-//const endpoint = "https://agent.datadoghq.com/api/v1/series";
-const endpoint = "http://localhost:8080";
+const endpoint = "https://agent.datadoghq.com/api/v1/series";
+//const endpoint = "http://localhost:8080";
 
 const max_retry_per_transaction = 5;
 // TODO(remy): instead of limiting on the amount of transactions, we could limit
@@ -158,10 +158,10 @@ pub const Forwarder = struct {
         defer allocator.free(t);
         switch (sample.metric_type) {
             metric.MetricTypeGauge => {
-                std.mem.copy(u8, t, "gauge");
+                std.mem.copyForwards(u8, t, "gauge");
             },
             else => {
-                std.mem.copy(u8, t, "count");
+                std.mem.copyForwards(u8, t, "count");
             },
         }
 
@@ -205,11 +205,11 @@ pub const Forwarder = struct {
         var headers: [*c]c.curl_slist = null;
 
         // url
-        var url = try std.fmt.allocPrintZ(allocator, "{s}?api_key={s}", .{ endpoint, config.apikey });
+        const url = try std.fmt.allocPrintZ(allocator, "{s}?api_key={s}", .{ endpoint, config.apikey });
         defer allocator.free(url);
 
         // apikeyHeader
-        var apikeyHeader = try std.fmt.allocPrintZ(allocator, "Dd-Api-Key: {s}", .{config.apikey});
+        const apikeyHeader = try std.fmt.allocPrintZ(allocator, "Dd-Api-Key: {s}", .{config.apikey});
         defer allocator.free(apikeyHeader);
 
         curl = c.curl_easy_init();
@@ -250,10 +250,10 @@ pub const Forwarder = struct {
 
 test "transaction_mem_usage" {
     const allocator = std.testing.allocator;
-    var name = try allocator.alloc(u8, "my.metric".len);
+    const name = try allocator.alloc(u8, "my.metric".len);
     std.mem.copy(u8, name, "my.metric");
 
-    var sample = Sample{
+    const sample = Sample{
         .metric_name = name,
         .metric_type = metric.MetricTypeGauge,
         .samples = 1,
@@ -261,7 +261,7 @@ test "transaction_mem_usage" {
         .tags = metric.Tags.init(allocator),
     };
 
-    var config = Config{
+    const config = Config{
         .hostname = "local",
         .apikey = "abcdef",
         .max_mem_mb = 20000,
@@ -286,10 +286,10 @@ test "write_sample_test" {
     const allocator = std.testing.allocator;
     var tx = try Transaction.init(allocator, 0);
 
-    var name = try allocator.alloc(u8, "my.metric".len);
+    const name = try allocator.alloc(u8, "my.metric".len);
     std.mem.copy(u8, name, "my.metric");
 
-    var sample = Sample{
+    const sample = Sample{
         .metric_name = name,
         .metric_type = metric.MetricTypeGauge,
         .samples = 1,
@@ -297,7 +297,7 @@ test "write_sample_test" {
         .tags = metric.Tags.init(allocator),
     };
 
-    var config = Config{
+    const config = Config{
         .hostname = "local",
         .apikey = "abcdef",
         .max_mem_mb = 20000,

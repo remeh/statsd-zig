@@ -1,6 +1,5 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const os = std.os;
 
 const ThreadContext = @import("main.zig").ThreadContext;
 
@@ -10,24 +9,24 @@ pub const Packet = struct {
 };
 
 fn open_socket_udp() !i32 {
-    var sockfd: i32 = try os.socket(
-        os.AF.INET,
-        os.SOCK.DGRAM | os.SOCK.CLOEXEC | os.SOCK.NONBLOCK,
+    const sockfd: i32 = try std.posix.socket(
+        std.posix.AF.INET,
+        std.posix.SOCK.DGRAM | std.posix.SOCK.CLOEXEC | std.posix.SOCK.NONBLOCK,
         0,
     );
     var addr: std.net.Address = try std.net.Address.parseIp4("127.0.0.1", 8125);
-    try os.bind(sockfd, &addr.any, @sizeOf(os.sockaddr.in));
+    try std.posix.bind(sockfd, &addr.any, @sizeOf(std.posix.sockaddr.in));
     return sockfd;
 }
 
 fn open_socket_uds() !i32 {
-    var sockfd: i32 = try os.socket(
-        os.AF.UNIX,
-        os.SOCK.DGRAM | os.SOCK.CLOEXEC | os.SOCK.NONBLOCK,
+    const sockfd: i32 = try std.posix.socket(
+        std.posix.AF.UNIX,
+        std.posix.SOCK.DGRAM | std.posix.SOCK.CLOEXEC | std.posix.SOCK.NONBLOCK,
         0,
     );
     var addr: std.net.Address = try std.net.Address.initUnix("statsd.sock");
-    try os.bind(sockfd, &addr.any, @sizeOf(os.sockaddr.in));
+    try std.posix.bind(sockfd, &addr.any, @sizeOf(std.posix.sockaddr.in));
     return sockfd;
 }
 
@@ -46,7 +45,7 @@ fn open_socket(context: *ThreadContext) !i32 {
 }
 
 pub fn listener(context: *ThreadContext) !void {
-    var sockfd: i32 = try open_socket(context);
+    const sockfd: i32 = try open_socket(context);
 
     // reading buffer
     var array: [8192]u8 = undefined;
@@ -61,7 +60,7 @@ pub fn listener(context: *ThreadContext) !void {
     // kqueue
     var kq: i32 = undefined;
     var kev: switch (builtin.os.tag) {
-        .macos => std.os.Kevent,
+        .macos => std.posix.Kevent,
         else => usize,
     } = undefined;
 
@@ -69,27 +68,27 @@ pub fn listener(context: *ThreadContext) !void {
         .linux => {
             // epoll
             std.log.info("using epoll", .{});
-            epfd = std.os.linux.epoll_create();
-            var epev = std.os.linux.epoll_event{
-                .events = std.os.linux.EPOLL.IN | std.os.linux.EPOLL.PRI | std.os.linux.EPOLL.ERR | std.os.linux.EPOLL.HUP,
-                .data = std.os.linux.epoll_data{ .fd = sockfd },
+            epfd = std.posix.linux.epoll_create();
+            var epev = std.posix.linux.epoll_event{
+                .events = std.posix.linux.EPOLL.IN | std.posix.linux.EPOLL.PRI | std.posix.linux.EPOLL.ERR | std.posix.linux.EPOLL.HUP,
+                .data = std.posix.linux.epoll_data{ .fd = sockfd },
             };
-            try std.os.epoll_ctl(
+            try std.posix.epoll_ctl(
                 @as(i32, @intCast(epfd)),
-                std.os.linux.EPOLL.CTL_ADD,
+                std.posix.linux.EPOLL.CTL_ADD,
                 sockfd,
                 &epev,
             );
-            errdefer std.os.linux.close(epfd);
+            errdefer std.posix.linux.close(epfd);
         },
         .netbsd, .openbsd, .macos => {
             std.log.info("using kqueue", .{});
-            kq = try std.os.kqueue();
-            errdefer std.os.close(kq);
-            kev = std.os.Kevent{
+            kq = try std.posix.kqueue();
+            errdefer std.posix.close(kq);
+            kev = std.posix.Kevent{
                 .ident = 1,
-                .filter = os.system.EVFILT_TIMER,
-                .flags = os.system.EV_CLEAR | os.system.EV_ADD | os.system.EV_DISABLE | os.system.EV_ONESHOT,
+                .filter = std.posix.system.EVFILT_TIMER,
+                .flags = std.posix.system.EV_CLEAR | std.posix.system.EV_ADD | std.posix.system.EV_DISABLE | std.posix.system.EV_ONESHOT,
                 .fflags = 0,
                 .data = 0,
                 .udata = undefined,
@@ -103,20 +102,20 @@ pub fn listener(context: *ThreadContext) !void {
     while (true) {
         switch (builtin.os.tag) {
             .linux => {
-                var events: [10]os.linux.epoll_event = undefined;
-                _ = std.os.linux.epoll_wait(@as(i32, @intCast(epfd)), events[0..], 10, -1);
+                var events: [10]std.posix.linux.epoll_event = undefined;
+                _ = std.posix.linux.epoll_wait(@as(i32, @intCast(epfd)), events[0..], 10, -1);
                 // std.log.info("epoll events count: {d}", .{events_count});
             },
             .netbsd, .openbsd, .macos => {
                 // TODO(remy): kqueue implementation
-                const empty_kevs = &[0]os.Kevent{};
-                const kevent_array = @as(*const [1]os.Kevent, &kev);
-                _ = try std.os.kevent(kq, kevent_array, empty_kevs, null);
+                const empty_kevs = &[0]std.posix.Kevent{};
+                const kevent_array = @as(*const [1]std.posix.Kevent, &kev);
+                _ = try std.posix.kevent(kq, kevent_array, empty_kevs, null);
             },
             else => {},
         }
 
-        const rlen = os.recvfrom(sockfd, buf, 0, null, null) catch {
+        const rlen = std.posix.recvfrom(sockfd, buf, 0, null, null) catch {
             continue;
         };
 
@@ -133,7 +132,7 @@ pub fn listener(context: *ThreadContext) !void {
         // take a pre-allocated buffers
         var node = context.b.get().?;
         // copy the data
-        std.mem.copy(u8, node.data.payload[0..rlen], buf[0..rlen]);
+        std.mem.copyForwards(u8, node.data.payload[0..rlen], buf[0..rlen]);
         node.data.len = rlen;
         // send it for processing
         context.q.put(node);

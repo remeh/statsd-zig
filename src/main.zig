@@ -2,7 +2,6 @@ const std = @import("std");
 const mem = std.mem;
 const fmt = std.fmt;
 const assert = std.debug.assert;
-const Queue = std.atomic.Queue;
 
 const listener = @import("listener.zig").listener;
 const Packet = @import("listener.zig").Packet;
@@ -10,6 +9,7 @@ const Packet = @import("listener.zig").Packet;
 const Metric = @import("metric.zig").Metric;
 const Config = @import("config.zig").Config;
 const Parser = @import("parser.zig").Parser;
+const AtomicQueue = @import("atomic_queue.zig").AtomicQueue;
 const Sampler = @import("sampler.zig").Sampler;
 const MeasureAllocator = @import("measure_allocator.zig").MeasureAllocator;
 
@@ -18,27 +18,27 @@ pub const flush_frequency = 15000;
 
 pub const ThreadContext = struct {
     // packets read from the network waiting to be processed
-    q: std.atomic.Queue(Packet),
+    q: AtomicQueue(Packet),
     // packets buffers available to share data between the listener thread
     // and the parser thread.
-    b: std.atomic.Queue(Packet),
+    b: AtomicQueue(Packet),
     // is running in UDS
     uds: bool,
 };
 
 pub fn main() !void {
     // queue communicating packets to parse
-    var queue = Queue(Packet).init();
+    const queue = AtomicQueue(Packet).init();
 
     // pre-alloc 4096 packets that will be re-used to contain the read data
     // these packets will do round-trips between the listener and the parser.
-    var packet_buffers = Queue(Packet).init();
+    var packet_buffers = AtomicQueue(Packet).init();
     var i: usize = 0;
 
     // TODO(remy): add a knob here
     while (i < 4096) {
-        // TODO(remy): use the GPA
-        var packet_node: *Queue(Packet).Node = try std.heap.page_allocator.create(Queue(Packet).Node);
+        // FIXME(remy): gpa
+        var packet_node: *AtomicQueue(Packet).Node = try std.heap.page_allocator.create(AtomicQueue(Packet).Node);
         packet_node.data = Packet{
             .payload = try std.heap.page_allocator.alloc(u8, 8192),
             .len = 0,
@@ -48,7 +48,7 @@ pub fn main() !void {
     }
 
     // read config
-    var config = try Config.read();
+    const config = try Config.read();
 
     // shared context
     var tx = ThreadContext{
@@ -68,7 +68,7 @@ pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
-    var measure_allocator = MeasureAllocator().init(arena.allocator());
+    var measure_allocator = MeasureAllocator.init(arena.allocator());
 
     var next_flush = std.time.milliTimestamp() + flush_frequency;
     var packets_parsed: u32 = 0;
@@ -78,7 +78,7 @@ pub fn main() !void {
     // TODO(remy): listen for Ctrl-C to clean up before exiting
     while (true) {
         while (!tx.q.isEmpty()) {
-            var node = tx.q.get().?;
+            const node = tx.q.get().?;
             // parse the packets
             if (Parser.parse_packet(measure_allocator.allocator(), node.data)) |metrics| {
                 packets_parsed += 1;
@@ -107,7 +107,7 @@ pub fn main() !void {
             // free the memory and reset the arena and measure allocator.
             arena.deinit();
             arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-            measure_allocator = MeasureAllocator().init(arena.allocator());
+            measure_allocator = MeasureAllocator.init(arena.allocator());
         }
 
         if (std.time.milliTimestamp() > next_flush) {

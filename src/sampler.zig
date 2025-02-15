@@ -37,7 +37,7 @@ pub const Sampler = struct {
 
     pub fn sample(self: *Sampler, m: metric.Metric) !void {
         const h = Sampler.hash(m);
-        var k = self.map.get(h);
+        const k = self.map.get(h);
         if (k) |s| {
             var newSample = Sample{
                 .metric_name = s.metric_name,
@@ -63,15 +63,15 @@ pub const Sampler = struct {
 
         // not existing, put it in the sampler
 
-        var name = try self.allocator.alloc(u8, m.name.len);
+        const name = try self.allocator.alloc(u8, m.name.len);
         var tags = metric.Tags.init(self.allocator);
         for (m.tags.items) |tag| {
-            var tag_copy = try self.allocator.alloc(u8, tag.len);
-            std.mem.copy(u8, tag_copy, tag);
+            const tag_copy = try self.allocator.alloc(u8, tag.len);
+            std.mem.copyForwards(u8, tag_copy, tag);
             try tags.append(tag_copy);
         }
 
-        std.mem.copy(u8, name, m.name);
+        std.mem.copyForwards(u8, name, m.name);
         self.mutex.lock();
         defer self.mutex.unlock();
         try self.map.put(h, Sample{
@@ -146,7 +146,7 @@ pub const Sampler = struct {
 test "sampling hashing" {
     var sampler = try Sampler.init(std.testing.allocator);
     var tags = try Parser.parse_tags(std.testing.allocator, "#my:tag,second:tag");
-    var m = metric.Metric{
+    const m = metric.Metric{
         .name = "this.is.my.metric",
         .value = 50.0,
         .type = metric.MetricTypeCounter,
@@ -159,7 +159,7 @@ test "sampling hashing" {
     try Sampler.sample(sampler, m);
     assert(Sampler.size(sampler) == 1);
 
-    var m2 = metric.Metric{
+    const m2 = metric.Metric{
         .name = "this.is.my.metric",
         .value = 25.0,
         .type = metric.MetricTypeCounter,
@@ -169,7 +169,7 @@ test "sampling hashing" {
     try Sampler.sample(sampler, m2);
     assert(Sampler.size(sampler) == 1);
 
-    var m3 = metric.Metric{
+    const m3 = metric.Metric{
         .name = "this.is.my.other.metric",
         .value = 25.0,
         .type = metric.MetricTypeCounter,

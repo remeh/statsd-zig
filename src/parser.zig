@@ -54,8 +54,8 @@ pub const Parser = struct {
                 part = iterator.next();
                 continue;
             }
-            var m: metric.Metric = try parse_metric(allocator, part.?);
-            try rv.append(m);
+            const m: metric.Metric = try parse_metric(allocator, part.?);
+            _ = try rv.append(m);
             part = iterator.next();
         }
 
@@ -67,7 +67,7 @@ pub const Parser = struct {
         var part: ?[]const u8 = iterator.next();
         var idx: u8 = 0;
 
-        // std.log.debug("packet received: {s}", .{packet});
+        std.log.debug("packet received: {s}", .{packet});
 
         var rv: metric.Metric = metric.Metric{
             .name = undefined,
@@ -128,9 +128,7 @@ pub const Parser = struct {
             part = iterator.next();
         }
 
-        var tags = rv.items;
-        std.sort.insertion([]const u8, tags, {}, lessThanTags);
-
+        std.sort.insertion([]const u8, rv.items, {}, lessThanTags);
         return rv;
     }
 
@@ -142,7 +140,7 @@ pub const Parser = struct {
 test "split_name_and_value" {
     const packet = "hello:5.0";
 
-    var m = try Parser.split_name_and_value(packet);
+    const m = try Parser.split_name_and_value(packet);
     assert(std.mem.eql(u8, m.name, "hello"));
     assert(m.value == 5.0);
 }
