@@ -8,7 +8,7 @@ Uses `epoll` on Linux, `kqueue` on macOS.
 ## Getting started
 
 - `libcurl` must be available on the system
-- Build the binary with `zig build` (build with Zig `0.13.0`)
+- Build the binary with `zig build` (build with Zig `0.14.0-dev.3222`)
 - Set the environment variables `APIKEY` and `HOSTNAME` to configure the daemon
 
 ### With UDP

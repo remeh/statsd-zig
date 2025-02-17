@@ -19,13 +19,14 @@ pub const MeasureAllocator = struct {
             .ptr = self,
             .vtable = &.{
                 .alloc = alloc,
+                .remap = remap,
                 .resize = resize,
                 .free = free,
             },
         };
     }
 
-    fn alloc(self: *anyopaque, len: usize, ptr_align: u8, ret_addr: usize) ?[*]u8 {
+    fn alloc(self: *anyopaque, len: usize, ptr_align: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
         const measure_alloc = @as(*MeasureAllocator, @alignCast(@ptrCast(self)));
         const result = measure_alloc.parent_allocator.rawAlloc(len, ptr_align, ret_addr);
         if (result) |_| {
@@ -36,7 +37,7 @@ pub const MeasureAllocator = struct {
         return result;
     }
 
-    fn resize(self: *anyopaque, buf: []u8, buf_align: u8, new_len: usize, ret_addr: usize) bool {
+    fn resize(self: *anyopaque, buf: []u8, buf_align: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
         const measure_alloc = @as(*MeasureAllocator, @alignCast(@ptrCast(self)));
         const old_len: usize = buf.len;
         const result = measure_alloc.parent_allocator.rawResize(buf, buf_align, new_len, ret_addr);
@@ -48,10 +49,14 @@ pub const MeasureAllocator = struct {
         return result;
     }
 
-    fn free(self: *anyopaque, buf: []u8, buf_align: u8, ret_addr: usize) void {
+    fn free(self: *anyopaque, buf: []u8, buf_align: std.mem.Alignment, ret_addr: usize) void {
         const measure_alloc = @as(*MeasureAllocator, @alignCast(@ptrCast(self)));
         measure_alloc.parent_allocator.rawFree(buf, buf_align, ret_addr);
         measure_alloc.allocated -= buf.len;
+    }
+
+    fn remap(self: *anyopaque, buf: []u8, buf_align: std.mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
+        return if (resize(self, buf, buf_align, new_len, ret_addr)) buf.ptr else null;
     }
 };
 

@@ -87,8 +87,8 @@ pub fn listener(context: *ThreadContext) !void {
             errdefer std.posix.close(kq);
             kev = std.posix.Kevent{
                 .ident = 1,
-                .filter = std.posix.system.EVFILT_TIMER,
-                .flags = std.posix.system.EV_CLEAR | std.posix.system.EV_ADD | std.posix.system.EV_DISABLE | std.posix.system.EV_ONESHOT,
+                .filter = std.c.EVFILT.TIMER,
+                .flags = std.c.EV.CLEAR | std.c.EV.ADD | std.c.EV.DISABLE | std.c.EV.ONESHOT,
                 .fflags = 0,
                 .data = 0,
                 .udata = undefined,
