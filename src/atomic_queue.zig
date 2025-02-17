@@ -11,7 +11,7 @@ pub fn AtomicQueue(comptime T: type) type {
         size: u32,
 
         const Self = @This();
-        pub const Node = DoublyLinkedList(T).Node;
+        pub const Node: type = DoublyLinkedList(T).Node;
 
         /// init creates an AtomicQueue.
         pub fn init() Self {
@@ -36,7 +36,6 @@ pub fn AtomicQueue(comptime T: type) type {
             defer self.mutex.unlock();
 
             self.size += 1;
-
             self.l.append(v);
         }
 
@@ -50,7 +49,6 @@ pub fn AtomicQueue(comptime T: type) type {
             }
 
             self.size -= 1;
-
             return self.l.popFirst();
         }
     };

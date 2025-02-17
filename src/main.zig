@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const mem = std.mem;
 const fmt = std.fmt;
 const assert = std.debug.assert;
@@ -6,10 +7,11 @@ const assert = std.debug.assert;
 const listener = @import("listener.zig").listener;
 const Packet = @import("listener.zig").Packet;
 
+const AtomicQueue = @import("atomic_queue.zig").AtomicQueue;
 const Metric = @import("metric.zig").Metric;
 const Config = @import("config.zig").Config;
 const Parser = @import("parser.zig").Parser;
-const AtomicQueue = @import("atomic_queue.zig").AtomicQueue;
+const PreallocatedPacketsPool = @import("preallocated_packets_pool.zig").PreallocatedPacketsPool;
 const Sampler = @import("sampler.zig").Sampler;
 const MeasureAllocator = @import("measure_allocator.zig").MeasureAllocator;
 
@@ -21,10 +23,32 @@ pub const ThreadContext = struct {
     q: AtomicQueue(Packet),
     // packets buffers available to share data between the listener thread
     // and the parser thread.
-    b: AtomicQueue(Packet),
+    b: *PreallocatedPacketsPool,
     // is running in UDS
     uds: bool,
 };
+
+var running: std.atomic.Value(bool) = std.atomic.Value(bool).init(true);
+
+fn catchSigint() !void {
+    switch (builtin.os.tag) {
+        .linux, .macos => {
+            const action = std.posix.Sigaction{
+                .handler = .{ .handler = sigintHandler },
+                .mask = std.posix.empty_sigset,
+                .flags = 0,
+            };
+
+            std.posix.sigaction(std.c.SIG.INT, &action, null);
+        },
+        else => {},
+    }
+}
+
+fn sigintHandler(_: c_int) callconv(.C) void {
+    running.store(false, .monotonic);
+    std.log.debug("sending stop signal", .{});
+}
 
 pub fn main() !void {
     // queue communicating packets to parse
@@ -32,23 +56,14 @@ pub fn main() !void {
 
     // gpa
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.detectLeaks();
 
-    // pre-alloc 4096 packets that will be re-used to contain the read data
-    // these packets will do round-trips between the listener and the parser.
-    var packet_buffers = AtomicQueue(Packet).init();
-    var i: usize = 0;
+    // catch close signal
+    try catchSigint();
 
-    // TODO(remy): add a knob here
-    while (i < 4096) {
-        // FIXME(remy): gpa
-        var packet_node: *AtomicQueue(Packet).Node = try std.heap.page_allocator.create(AtomicQueue(Packet).Node);
-        packet_node.data = Packet{
-            .payload = try std.heap.page_allocator.alloc(u8, 8192),
-            .len = 0,
-        };
-        packet_buffers.put(packet_node);
-        i += 1;
-    }
+    // TODO(remy): configurable packets pool
+    var packets_pool = try PreallocatedPacketsPool.init(gpa.allocator(), 4096);
+    defer packets_pool.deinit();
 
     // read config
     const config = try Config.read();
@@ -56,12 +71,13 @@ pub fn main() !void {
     // shared context
     var tx = ThreadContext{
         .q = queue,
-        .b = packet_buffers,
+        .b = packets_pool,
         .uds = config.uds,
     };
 
     // create the sampler
     var sampler = try Sampler.init(gpa.allocator());
+    defer sampler.deinit();
 
     // spawn the listening thread
     const thread = try std.Thread.spawn(std.Thread.SpawnConfig{}, listener, .{&tx});
@@ -77,30 +93,29 @@ pub fn main() !void {
     var metrics_parsed: u32 = 0;
 
     // pipeline mainloop
-    // TODO(remy): listen for Ctrl-C to clean up before exiting
     while (true) {
         while (!tx.q.isEmpty()) {
-            const node = tx.q.get().?;
-            // parse the packets
-            if (Parser.parse_packet(measure_allocator.allocator(), node.data)) |metrics| {
-                packets_parsed += 1;
-                // sampling
-                i = 0;
-                while (i < metrics.items.len) {
-                    metrics_parsed += 1;
-                    try sampler.sample(metrics.items[i]);
-                    i += 1;
+            if (tx.q.get()) |node| {
+                // parse the packets
+                if (Parser.parse_packet(measure_allocator.allocator(), node.data)) |metrics| {
+                    packets_parsed += 1;
+                    // sampling
+                    var i: usize = 0;
+                    while (i < metrics.items.len) : (i += 1) {
+                        metrics_parsed += 1;
+                        try sampler.sample(metrics.items[i]);
+                    }
+                } else |err| {
+                    std.log.err("can't parse packet: {s}", .{@errorName(err)});
+                    std.log.err("packet: {s}", .{node.data.payload});
                 }
-            } else |err| {
-                std.log.err("can't parse packet: {s}", .{@errorName(err)});
-                std.log.err("packet: {s}", .{node.data.payload});
-            }
-
-            // send this buffer back to the usable queue of buffers
-            tx.b.put(node);
-
-            if (measure_allocator.allocated > config.max_mem_mb * 1024 * 1024) {
-                break;
+    
+                // send this buffer back to the usable queue of buffers
+                tx.b.put(node);
+    
+                if (measure_allocator.allocated > config.max_mem_mb * 1024 * 1024) {
+                    break;
+                }
             }
         }
 
@@ -125,7 +140,11 @@ pub fn main() !void {
 
             next_flush = std.time.milliTimestamp() + flush_frequency;
         }
+
+        if (!running.load(.monotonic)) {
+            break;
+        }
     }
 
-    // TODO(remy): delete the socket
+    try std.fs.cwd().deleteFile("statsd.sock");
 }

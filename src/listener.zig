@@ -4,7 +4,7 @@ const builtin = @import("builtin");
 const ThreadContext = @import("main.zig").ThreadContext;
 
 pub const Packet = struct {
-    payload: []u8,
+    payload: [8192]u8,
     len: usize,
 };
 

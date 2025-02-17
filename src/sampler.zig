@@ -24,15 +24,15 @@ pub const Sampler = struct {
     mutex: std.Thread.Mutex,
     forwarder: Forwarder,
 
-    pub fn init(allocator: std.mem.Allocator) !*Sampler {
-        var rv = try allocator.create(Sampler);
-        rv.map = std.AutoHashMap(u64, Sample).init(allocator);
-        rv.allocator = allocator;
-        rv.mutex = std.Thread.Mutex{};
-        rv.forwarder = Forwarder{
-            .transactions = std.ArrayList(*Transaction).init(allocator),
+    pub fn init(allocator: std.mem.Allocator) !Sampler {
+        return Sampler{
+            .map = std.AutoHashMap(u64, Sample).init(allocator),
+            .allocator = allocator,
+            .mutex = std.Thread.Mutex{},
+            .forwarder = Forwarder{
+                .transactions = std.ArrayList(*Transaction).init(allocator),
+            },
         };
-        return rv;
     }
 
     pub fn sample(self: *Sampler, m: metric.Metric) !void {
@@ -120,7 +120,6 @@ pub const Sampler = struct {
         }
         self.forwarder.deinit();
         self.map.deinit();
-        self.allocator.destroy(self);
     }
 
     // TODO(remy): debug method, remove?
