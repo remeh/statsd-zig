@@ -31,8 +31,6 @@ pub const MeasureAllocator = struct {
         const result = measure_alloc.parent_allocator.rawAlloc(len, ptr_align, ret_addr);
         if (result) |_| {
             measure_alloc.allocated += len;
-            //        } else |err| { // FIXME(remy):
-            //            return err;
         }
         return result;
     }

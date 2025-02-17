@@ -30,6 +30,9 @@ pub fn main() !void {
     // queue communicating packets to parse
     const queue = AtomicQueue(Packet).init();
 
+    // gpa
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+
     // pre-alloc 4096 packets that will be re-used to contain the read data
     // these packets will do round-trips between the listener and the parser.
     var packet_buffers = AtomicQueue(Packet).init();
@@ -58,16 +61,15 @@ pub fn main() !void {
     };
 
     // create the sampler
-    var sampler = try Sampler.init(std.heap.page_allocator);
+    var sampler = try Sampler.init(gpa.allocator());
 
     // spawn the listening thread
     const thread = try std.Thread.spawn(std.Thread.SpawnConfig{}, listener, .{&tx});
     thread.detach();
 
     // prepare the allocator used by the parser
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    var arena = std.heap.ArenaAllocator.init(gpa.allocator());
     defer arena.deinit();
-
     var measure_allocator = MeasureAllocator.init(arena.allocator());
 
     var next_flush = std.time.milliTimestamp() + flush_frequency;
@@ -106,7 +108,7 @@ pub fn main() !void {
             std.log.debug("memory arena has reached {}MB, deinit and recreate.", .{measure_allocator.allocated / 1024 / 1024});
             // free the memory and reset the arena and measure allocator.
             arena.deinit();
-            arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+            arena = std.heap.ArenaAllocator.init(gpa.allocator());
             measure_allocator = MeasureAllocator.init(arena.allocator());
         }
 
@@ -117,6 +119,7 @@ pub fn main() !void {
 
             std.log.info("packets parsed: {d}/s ({d} last {d}s)", .{ @divTrunc(packets_parsed, (flush_frequency / 1000)), packets_parsed, flush_frequency / 1000 });
             std.log.info("metrics parsed: {d}/s ({d} last {d}s)", .{ @divTrunc(metrics_parsed, (flush_frequency / 1000)), metrics_parsed, flush_frequency / 1000 });
+            std.log.info("reporting {d} bytes used by the parser", .{measure_allocator.allocated});
             packets_parsed = 0;
             metrics_parsed = 0;
 
