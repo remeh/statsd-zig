@@ -18,8 +18,8 @@ pub const Parser = struct {
         var rv: metric.Metric = metric.Metric{
             .name = "",
             .value = 0.0,
-            .type = metric.MetricTypeUnknown,
-            .tags = undefined,
+            .type = .Unknown,
+            .tags = null,
         };
         var idx: u8 = 0;
         while (part != null) {
@@ -55,7 +55,7 @@ pub const Parser = struct {
                 continue;
             }
             const m: metric.Metric = try parse_metric(allocator, part.?);
-            _ = try rv.append(m);
+            try rv.append(m);
             part = iterator.next();
         }
 
@@ -70,8 +70,8 @@ pub const Parser = struct {
         var rv: metric.Metric = metric.Metric{
             .name = undefined,
             .value = 0.0,
-            .type = metric.MetricTypeUnknown,
-            .tags = undefined,
+            .type = .Unknown,
+            .tags = null,
         };
 
         while (part != null) {
@@ -83,12 +83,11 @@ pub const Parser = struct {
                     rv.value = nv.value;
                 },
                 1 => {
-                    // metric type
-                    if (part.?[0] == metric.MetricTypeCounter) {
-                        rv.type = metric.MetricTypeCounter;
-                    } else if (part.?[0] == metric.MetricTypeGauge) {
-                        rv.type = metric.MetricTypeGauge;
-                    }
+                    rv.type = switch (part.?[0]) {
+                        'c' => .Counter,
+                        'g' => .Gauge,
+                        else => .Unknown,
+                    };
                 },
                 2 => {
                     // metric tags

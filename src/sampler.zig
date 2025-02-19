@@ -12,8 +12,8 @@ const Transaction = @import("forwarder.zig").Transaction;
 
 pub const Sample = struct {
     metric_name: []u8,
-    metric_type: u8,
-    tags: metric.Tags,
+    metric_type: metric.MetricType,
+    tags: ?metric.Tags,
     samples: u64,
     value: f32,
 };
@@ -47,10 +47,10 @@ pub const Sampler = struct {
                 .value = s.value,
             };
             switch (s.metric_type) {
-                metric.MetricTypeGauge => {
+                .Gauge => {
                     newSample.value = m.value;
                 },
-                // MetricTypeCounter & MetricTypeUnknown
+                // Counter & Unknown
                 else => {
                     newSample.value += m.value;
                 },
@@ -65,10 +65,12 @@ pub const Sampler = struct {
 
         const name = try self.allocator.alloc(u8, m.name.len);
         var tags = metric.Tags.init(self.allocator);
-        for (m.tags.items) |tag| {
-            const tag_copy = try self.allocator.alloc(u8, tag.len);
-            std.mem.copyForwards(u8, tag_copy, tag);
-            try tags.append(tag_copy);
+        if (m.tags) |metric_tags| {
+            for (metric_tags.items) |tag| {
+                const tag_copy = try self.allocator.alloc(u8, tag.len);
+                std.mem.copyForwards(u8, tag_copy, tag);
+                try tags.append(tag_copy);
+            }
         }
 
         std.mem.copyForwards(u8, name, m.name);
@@ -97,10 +99,12 @@ pub const Sampler = struct {
         var it = self.map.iterator();
         while (it.next()) |kv| {
             self.allocator.free(kv.value_ptr.*.metric_name);
-            for (kv.value_ptr.*.tags.items) |tag| {
-                self.allocator.free(tag);
+            if (kv.value_ptr.*.tags) |tags| {
+                for (tags.items) |tag| {
+                    self.allocator.free(tag);
+                }
+                tags.deinit();
             }
-            kv.value_ptr.*.tags.deinit();
         }
         self.map.deinit();
         self.map = std.AutoHashMap(u64, Sample).init(self.allocator);
@@ -113,10 +117,12 @@ pub const Sampler = struct {
         var it = self.map.iterator();
         while (it.next()) |kv| {
             self.allocator.free(kv.value_ptr.*.metric_name);
-            for (kv.value_ptr.*.tags.items) |tag| {
-                self.allocator.free(tag);
+            if (kv.value_ptr.*.tags) |tags| {
+                for (tags.items) |tag| {
+                    self.allocator.free(tag);
+                }
+                tags.deinit();
             }
-            kv.value_ptr.*.tags.deinit();
         }
         self.forwarder.deinit();
         self.map.deinit();
@@ -135,8 +141,10 @@ pub const Sampler = struct {
         var h = fnv1a.init();
         h.update(m.name);
         var i: usize = 0;
-        while (i < m.tags.items.len) : (i += 1) {
-            h.update(m.tags.items[i]);
+        if (m.tags) |tags| {
+            while (i < tags.items.len) : (i += 1) {
+                h.update(tags.items[i]);
+            }
         }
         return h.final();
     }

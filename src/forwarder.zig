@@ -5,8 +5,8 @@ const Sample = @import("sampler.zig").Sample;
 const Config = @import("config.zig").Config;
 const metric = @import("metric.zig");
 
-const series_endpoint = "https://agent.datadoghq.com/api/v1/series";
-//const series_endpoint = "http://localhost:8080";
+//const series_endpoint = "https://agent.datadoghq.com/api/v1/series";
+const series_endpoint = "http://localhost:8080";
 
 const max_retry_per_transaction = 5;
 // TODO(remy): instead of limiting on the amount of transactions, we could limit
@@ -186,28 +186,24 @@ pub const Forwarder = struct {
         // }
 
         // metric type string
-        const t: []u8 = try allocator.alloc(u8, 5);
-        defer allocator.free(t);
-        switch (sample.metric_type) {
-            metric.MetricTypeGauge => {
-                std.mem.copyForwards(u8, t, "gauge");
-            },
-            else => {
-                std.mem.copyForwards(u8, t, "count");
-            },
-        }
+        const t: []const u8 = switch (sample.metric_type) {
+            .Gauge => "gauge",
+            else => "count",
+        };
 
         // tags
         var tags = std.ArrayList(u8).init(allocator);
         var i: usize = 0;
-        for (sample.tags.items) |tag| {
-            try tags.append('"');
-            try tags.appendSlice(tag);
-            try tags.append('"');
-            if (i < sample.tags.items.len - 1) {
-                try tags.append(',');
+        if (sample.tags) |stags| {
+            for (stags.items) |tag| {
+                try tags.append('"');
+                try tags.appendSlice(tag);
+                try tags.append('"');
+                if (i < stags.items.len - 1) {
+                    try tags.append(',');
+                }
+                i += 1;
             }
-            i += 1;
         }
         defer tags.deinit();
 
@@ -283,10 +279,10 @@ test "transaction_mem_usage" {
 
     const sample = Sample{
         .metric_name = name,
-        .metric_type = metric.MetricTypeGauge,
+        .metric_type = .Gauge,
         .samples = 1,
         .value = 1,
-        .tags = metric.Tags.init(allocator),
+        .tags = null,
     };
 
     const config = Config{
@@ -319,10 +315,10 @@ test "write_sample_test" {
 
     const sample = Sample{
         .metric_name = name,
-        .metric_type = metric.MetricTypeGauge,
+        .metric_type = .Gauge,
         .samples = 1,
         .value = 1,
-        .tags = metric.Tags.init(allocator),
+        .tags = null,
     };
 
     const config = Config{

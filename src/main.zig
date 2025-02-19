@@ -146,8 +146,8 @@ pub fn main() !void {
             const m = metric.Metric{
                 .name = "statsd.parser.bytes_inuse",
                 .value = @floatFromInt(measure_allocator.allocated),
-                .type = metric.MetricTypeGauge,
-                .tags = metric.Tags.init(measure_allocator.allocator()),
+                .type = .Gauge,
+                .tags = null,
             };
             sampler.sample(m) catch |err| {
                 std.log.err("can't report parser telemetry: {}", .{err});

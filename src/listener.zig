@@ -147,19 +147,15 @@ pub fn listener(context: *ThreadContext) !void {
             last_drop_message = std.time.milliTimestamp();
             std.log.info("listener drops: {d}/s ({d} last {d}s)", .{ @divTrunc(drops, @divTrunc(tmp, 1000)), drops, 10 });
             // TODO(remy): some function in sampler here
-            const m = metric.Metric{
-                .name = "statsd.listener.packet_drop",
-                .value = @floatFromInt(drops),
-                .type = metric.MetricTypeCounter,
-                .tags = metric.Tags{ // FIXME(remy): huhuhu
-                    .capacity = 0,
-                    .items = undefined,
-                    .allocator = undefined,
-                },
-            };
-            context.sampler.sample(m) catch |err| {
-                std.log.err("can't report parser telemetry: {}", .{err});
-            };
+            //            const m = metric.Metric{
+            //                .name = "statsd.listener.packet_drop",
+            //                .value = @floatFromInt(drops),
+            //                .type = .Counter,
+            //                .tags = null,
+            //            };
+            //            context.sampler.sample(m) catch |err| {
+            //                std.log.err("can't report parser telemetry: {}", .{err});
+            //            };
 
             drops = 0;
         }
