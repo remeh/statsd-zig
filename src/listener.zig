@@ -4,7 +4,7 @@ const builtin = @import("builtin");
 const ThreadContext = @import("main.zig").ThreadContext;
 
 pub const Packet = struct {
-    payload: []u8,
+    payload: [8192]u8,
     len: usize,
 };
 
@@ -116,24 +116,28 @@ pub fn listener(context: *ThreadContext) !void {
         }
 
         const rlen = std.posix.recvfrom(sockfd, buf, 0, null, null) catch {
+            std.posix.nanosleep(0, 1000000);
             continue;
         };
 
         if (rlen == 0) {
+            std.posix.nanosleep(0, 1000000);
             continue;
         }
 
-        if (context.b.isEmpty()) {
+        const maybe_node = context.b.get();
+        if (maybe_node == null) {
             drops += 1;
             // no more pre-allocated buffers available, this packet will be dropped.
             continue;
         }
 
         // take a pre-allocated buffers
-        var node = context.b.get().?;
+        var node = maybe_node.?;
         // copy the data
         std.mem.copyForwards(u8, node.data.payload[0..rlen], buf[0..rlen]);
         node.data.len = rlen;
+
         // send it for processing
         context.q.put(node);
 
@@ -143,5 +147,7 @@ pub fn listener(context: *ThreadContext) !void {
             std.log.info("listener drops: {d}/s ({d} last {d}s)", .{ @divTrunc(drops, @divTrunc(tmp, 1000)), drops, 10 });
             drops = 0;
         }
+
+        std.posix.nanosleep(0, 100000);
     }
 }

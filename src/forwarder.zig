@@ -38,6 +38,14 @@ pub const Transaction = struct {
         self.data.deinit();
         self.allocator.destroy(self);
     }
+
+    pub fn compress(self: *Transaction) !void {
+        var compressed = std.ArrayList(u8).init(self.allocator);
+        var reader = std.io.fixedBufferStream(self.data.items);
+        try std.compress.zlib.compress(reader.reader(), compressed.writer(), .{});
+        self.data.deinit();
+        self.data = compressed;
+    }
 };
 
 pub const Forwarder = struct {
@@ -110,6 +118,10 @@ pub const Forwarder = struct {
         }
 
         try tx.data.appendSlice("]}");
+
+        // compress the transaction
+        try tx.compress();
+
         return tx;
     }
 
@@ -182,7 +194,7 @@ pub const Forwarder = struct {
         // build the json
         const json = try std.fmt.allocPrint(
             allocator,
-            "{{\"metric\":\"{s}\",\"host\":\"{s}\",\"tags\":[{s}],\"type\":\"{s}\",\"points\":[[{d},{d}]],\"interval\":0}}",
+            "{{\"metric\":\"{s}\",\"host\":\"{s}\",\"tags\":[{s}],\"type\":\"{s}\",\"points\":[[{d},{d}]],\"interval\":0,\"source_type_name\":\"System\"}}",
             .{
                 sample.metric_name,
                 config.hostname,
@@ -198,6 +210,8 @@ pub const Forwarder = struct {
         try tx.*.data.appendSlice(json);
     }
 
+    // TODO(remy): do not alloc the endpoint
+    // TODO(remy): do not alloc the api key header
     fn send_http_request(allocator: std.mem.Allocator, config: Config, tx: *Transaction) !void {
         var failed: bool = false;
         var curl: ?*c.CURL = null;
@@ -224,6 +238,8 @@ pub const Forwarder = struct {
 
             // http headers
             headers = c.curl_slist_append(headers, "Content-Type: application/json");
+            headers = c.curl_slist_append(headers, "Content-Encoding: deflate");
+            headers = c.curl_slist_append(headers, "User-Agent: datadog-agent/7.64.0-devel+git.105.dde2fc2");
             headers = c.curl_slist_append(headers, @as([*:0]const u8, @ptrCast(apikeyHeader)));
             _ = c.curl_easy_setopt(curl, c.CURLOPT_HTTPHEADER, headers);
 

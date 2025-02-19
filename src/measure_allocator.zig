@@ -27,7 +27,7 @@ pub const MeasureAllocator = struct {
     }
 
     fn alloc(self: *anyopaque, len: usize, ptr_align: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
-        const measure_alloc = @as(*MeasureAllocator, @alignCast(@ptrCast(self)));
+        const measure_alloc = @as(*MeasureAllocator, @ptrCast(@alignCast(self)));
         const result = measure_alloc.parent_allocator.rawAlloc(len, ptr_align, ret_addr);
         if (result) |_| {
             measure_alloc.allocated += len;
@@ -36,7 +36,7 @@ pub const MeasureAllocator = struct {
     }
 
     fn resize(self: *anyopaque, buf: []u8, buf_align: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
-        const measure_alloc = @as(*MeasureAllocator, @alignCast(@ptrCast(self)));
+        const measure_alloc = @as(*MeasureAllocator, @ptrCast(@alignCast(self)));
         const old_len: usize = buf.len;
         const result = measure_alloc.parent_allocator.rawResize(buf, buf_align, new_len, ret_addr);
         if (result) {
@@ -48,7 +48,7 @@ pub const MeasureAllocator = struct {
     }
 
     fn free(self: *anyopaque, buf: []u8, buf_align: std.mem.Alignment, ret_addr: usize) void {
-        const measure_alloc = @as(*MeasureAllocator, @alignCast(@ptrCast(self)));
+        const measure_alloc = @as(*MeasureAllocator, @ptrCast(@alignCast(self)));
         measure_alloc.parent_allocator.rawFree(buf, buf_align, ret_addr);
         measure_alloc.allocated -= buf.len;
     }

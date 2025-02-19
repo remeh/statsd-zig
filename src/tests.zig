@@ -5,4 +5,3 @@ test "all tests" {
     _ = @import("parser.zig");
     _ = @import("sampler.zig");
 }
-

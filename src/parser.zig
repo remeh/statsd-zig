@@ -67,8 +67,6 @@ pub const Parser = struct {
         var part: ?[]const u8 = iterator.next();
         var idx: u8 = 0;
 
-        std.log.debug("packet received: {s}", .{packet});
-
         var rv: metric.Metric = metric.Metric{
             .name = undefined,
             .value = 0.0,
