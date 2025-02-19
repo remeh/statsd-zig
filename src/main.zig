@@ -8,7 +8,7 @@ const listener = @import("listener.zig").listener;
 const Packet = @import("listener.zig").Packet;
 
 const AtomicQueue = @import("atomic_queue.zig").AtomicQueue;
-const Metric = @import("metric.zig").Metric;
+const metric = @import("metric.zig");
 const Config = @import("config.zig").Config;
 const Parser = @import("parser.zig").Parser;
 const PreallocatedPacketsPool = @import("preallocated_packets_pool.zig").PreallocatedPacketsPool;
@@ -18,14 +18,18 @@ const MeasureAllocator = @import("measure_allocator.zig").MeasureAllocator;
 /// flush_frequency represents how often we flush the sampler (in ms).
 pub const flush_frequency = 15000;
 
+// TODO(remy): comment me
 pub const ThreadContext = struct {
-    // packets read from the network waiting to be processed
+    /// packets read from the network waiting to be processed
     q: AtomicQueue(Packet),
-    // packets buffers available to share data between the listener thread
-    // and the parser thread.
+    /// packets buffers available to share data between the listener thread
+    /// and the parser thread.
     b: *PreallocatedPacketsPool,
-    // is running in UDS
+    /// is running in UDS
     uds: bool,
+    /// sampler to send telemetry from the server itself
+    // FIXME(remy): sharing the sampler here is an abomination
+    sampler: *Sampler,
 };
 
 var running: std.atomic.Value(bool) = std.atomic.Value(bool).init(true);
@@ -69,16 +73,17 @@ pub fn main() !void {
     // read config
     const config = try Config.read();
 
+    // create the sampler
+    var sampler = try Sampler.init(gpa.allocator(), config);
+    defer sampler.deinit();
+
     // shared context
     var tx = ThreadContext{
         .q = queue,
         .b = packets_pool,
         .uds = config.uds,
+        .sampler = &sampler,
     };
-
-    // create the sampler
-    var sampler = try Sampler.init(gpa.allocator());
-    defer sampler.deinit();
 
     // spawn the listening thread
     const thread = try std.Thread.spawn(std.Thread.SpawnConfig{}, listener, .{&tx});
@@ -129,20 +134,32 @@ pub fn main() !void {
         }
 
         if (std.time.milliTimestamp() > next_flush) {
-            sampler.flush(config) catch |err| {
+            sampler.flush() catch |err| {
                 std.log.err("can't flush: {s}", .{@errorName(err)});
             };
 
             std.log.info("packets parsed: {d}/s ({d} last {d}s)", .{ @divTrunc(packets_parsed, (flush_frequency / 1000)), packets_parsed, flush_frequency / 1000 });
             std.log.info("metrics parsed: {d}/s ({d} last {d}s)", .{ @divTrunc(metrics_parsed, (flush_frequency / 1000)), metrics_parsed, flush_frequency / 1000 });
             std.log.info("reporting {d} bytes used by the parser", .{measure_allocator.allocated});
+
+            // TODO(remy): some function in sampler here
+            const m = metric.Metric{
+                .name = "statsd.parser.bytes_inuse",
+                .value = @floatFromInt(measure_allocator.allocated),
+                .type = metric.MetricTypeGauge,
+                .tags = metric.Tags.init(measure_allocator.allocator()),
+            };
+            sampler.sample(m) catch |err| {
+                std.log.err("can't report parser telemetry: {}", .{err});
+            };
+
             packets_parsed = 0;
             metrics_parsed = 0;
 
             next_flush = std.time.milliTimestamp() + flush_frequency;
         }
 
-        std.posix.nanosleep(0, 100000);
+        //        std.posix.nanosleep(0, 100000);
 
         if (!running.load(.monotonic)) {
             break;

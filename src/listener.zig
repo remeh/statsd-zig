@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+const metric = @import("metric.zig");
 const ThreadContext = @import("main.zig").ThreadContext;
 
 pub const Packet = struct {
@@ -145,9 +146,24 @@ pub fn listener(context: *ThreadContext) !void {
         if (tmp > 10000) {
             last_drop_message = std.time.milliTimestamp();
             std.log.info("listener drops: {d}/s ({d} last {d}s)", .{ @divTrunc(drops, @divTrunc(tmp, 1000)), drops, 10 });
+            // TODO(remy): some function in sampler here
+            const m = metric.Metric{
+                .name = "statsd.listener.packet_drop",
+                .value = @floatFromInt(drops),
+                .type = metric.MetricTypeCounter,
+                .tags = metric.Tags{ // FIXME(remy): huhuhu
+                    .capacity = 0,
+                    .items = undefined,
+                    .allocator = undefined,
+                },
+            };
+            context.sampler.sample(m) catch |err| {
+                std.log.err("can't report parser telemetry: {}", .{err});
+            };
+
             drops = 0;
         }
 
-        std.posix.nanosleep(0, 100000);
+        //        std.posix.nanosleep(0, 100000);
     }
 }

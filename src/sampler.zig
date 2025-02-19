@@ -19,19 +19,19 @@ pub const Sample = struct {
 };
 
 pub const Sampler = struct {
-    map: std.AutoHashMap(u64, Sample),
     allocator: std.mem.Allocator,
-    mutex: std.Thread.Mutex,
+    config: Config,
     forwarder: Forwarder,
+    map: std.AutoHashMap(u64, Sample),
+    mutex: std.Thread.Mutex,
 
-    pub fn init(allocator: std.mem.Allocator) !Sampler {
+    pub fn init(allocator: std.mem.Allocator, config: Config) !Sampler {
         return Sampler{
-            .map = std.AutoHashMap(u64, Sample).init(allocator),
             .allocator = allocator,
+            .config = config,
+            .forwarder = try Forwarder.init(allocator, config),
+            .map = std.AutoHashMap(u64, Sample).init(allocator),
             .mutex = std.Thread.Mutex{},
-            .forwarder = Forwarder{
-                .transactions = std.ArrayList(*Transaction).init(allocator),
-            },
         };
     }
 
@@ -87,11 +87,11 @@ pub const Sampler = struct {
         return self.map.count();
     }
 
-    pub fn flush(self: *Sampler, config: Config) !void {
+    pub fn flush(self: *Sampler) !void {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        try self.forwarder.flush(self.allocator, config, &self.map);
+        try self.forwarder.flush(self.allocator, self.config, &self.map);
 
         // release the memory used for all metrics names, tags and reset the map
         var it = self.map.iterator();

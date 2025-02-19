@@ -5,8 +5,8 @@ const Sample = @import("sampler.zig").Sample;
 const Config = @import("config.zig").Config;
 const metric = @import("metric.zig");
 
-const endpoint = "https://agent.datadoghq.com/api/v1/series";
-//const endpoint = "http://localhost:8080";
+const series_endpoint = "https://agent.datadoghq.com/api/v1/series";
+//const series_endpoint = "http://localhost:8080";
 
 const max_retry_per_transaction = 5;
 // TODO(remy): instead of limiting on the amount of transactions, we could limit
@@ -49,9 +49,29 @@ pub const Transaction = struct {
 };
 
 pub const Forwarder = struct {
+    allocator: std.mem.Allocator,
+    config: Config,
+    consts: struct {
+        series_url: [:0]const u8,
+        apikey_header: [:0]const u8,
+    },
     transactions: std.ArrayList(*Transaction),
 
+    pub fn init(allocator: std.mem.Allocator, config: Config) !Forwarder {
+        return .{
+            .allocator = allocator,
+            .config = config,
+            .consts = .{
+                .series_url = try std.fmt.allocPrintZ(allocator, "{s}?api_key={s}", .{ series_endpoint, config.apikey }),
+                .apikey_header = try std.fmt.allocPrintZ(allocator, "Dd-Api-Key: {s}", .{config.apikey}),
+            },
+            .transactions = std.ArrayList(*Transaction).init(allocator),
+        };
+    }
+
     pub fn deinit(self: *Forwarder) void {
+        self.allocator.free(self.consts.apikey_header);
+        self.allocator.free(self.consts.series_url);
         for (self.transactions.items) |tx| {
             tx.deinit();
         }
@@ -69,7 +89,7 @@ pub const Forwarder = struct {
             const tx = try create_transaction(allocator, config, samples, std.time.milliTimestamp());
 
             // try to send the transaction
-            send_http_request(allocator, config, tx) catch |err| {
+            self.send_http_request(tx) catch |err| {
                 std.log.warn("can't send a transaction: {s}\nstoring the transaction of size {d} bytes [{s}]", .{ @errorName(err), tx.data.items.len, tx.data.items });
 
                 // limit the amount of transactions stored
@@ -95,7 +115,7 @@ pub const Forwarder = struct {
 
         if (self.transactions.items.len > 0) {
             // don't replay more than 3 transactions
-            self.replay_old_transactions(allocator, config, 3);
+            self.replay_old_transactions(3);
         }
     }
 
@@ -125,14 +145,14 @@ pub const Forwarder = struct {
         return tx;
     }
 
-    fn replay_old_transactions(self: *Forwarder, allocator: std.mem.Allocator, config: Config, maxReplayed: usize) void {
+    fn replay_old_transactions(self: *Forwarder, maxReplayed: usize) void {
         var i: usize = 0;
         while (i < maxReplayed) : (i += 1) {
             if (self.transactions.items.len == 0) {
                 break;
             }
             var tx = self.transactions.orderedRemove(0);
-            send_http_request(allocator, config, tx) catch |err| {
+            self.send_http_request(tx) catch |err| {
                 std.log.warn("error while retrying a transaction: {s}", .{@errorName(err)});
                 if (tx.tries < max_retry_per_transaction) {
                     tx.tries += 1;
@@ -212,24 +232,16 @@ pub const Forwarder = struct {
 
     // TODO(remy): do not alloc the endpoint
     // TODO(remy): do not alloc the api key header
-    fn send_http_request(allocator: std.mem.Allocator, config: Config, tx: *Transaction) !void {
+    fn send_http_request(self: *Forwarder, tx: *Transaction) !void {
         var failed: bool = false;
         var curl: ?*c.CURL = null;
         var res: c.CURLcode = undefined;
         var headers: [*c]c.curl_slist = null;
 
-        // url
-        const url = try std.fmt.allocPrintZ(allocator, "{s}?api_key={s}", .{ endpoint, config.apikey });
-        defer allocator.free(url);
-
-        // apikeyHeader
-        const apikeyHeader = try std.fmt.allocPrintZ(allocator, "Dd-Api-Key: {s}", .{config.apikey});
-        defer allocator.free(apikeyHeader);
-
         curl = c.curl_easy_init();
         if (curl != null) {
             // url
-            _ = c.curl_easy_setopt(curl, c.CURLOPT_URL, @as([*:0]const u8, @ptrCast(url)));
+            _ = c.curl_easy_setopt(curl, c.CURLOPT_URL, @as([*:0]const u8, @ptrCast(self.consts.series_url)));
 
             // body
             _ = c.curl_easy_setopt(curl, c.CURLOPT_POSTFIELDSIZE, tx.data.items.len);
@@ -240,7 +252,7 @@ pub const Forwarder = struct {
             headers = c.curl_slist_append(headers, "Content-Type: application/json");
             headers = c.curl_slist_append(headers, "Content-Encoding: deflate");
             headers = c.curl_slist_append(headers, "User-Agent: datadog-agent/7.64.0-devel+git.105.dde2fc2");
-            headers = c.curl_slist_append(headers, @as([*:0]const u8, @ptrCast(apikeyHeader)));
+            headers = c.curl_slist_append(headers, @as([*:0]const u8, @ptrCast(self.consts.apikey_header)));
             _ = c.curl_easy_setopt(curl, c.CURLOPT_HTTPHEADER, headers);
 
             // perform the call
