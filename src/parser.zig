@@ -1,8 +1,10 @@
 const std = @import("std");
 const assert = @import("std").debug.assert;
 
-const metric = @import("metric.zig");
+const Metric = @import("metric.zig").Metric;
+const MetricType = @import("metric.zig").MetricType;
 const Packet = @import("listener.zig").Packet;
+const TagsSetUnmanaged = @import("metric.zig").TagsSetUnmanaged;
 
 pub const ParsingError = error{
     MalformedNameValue,
@@ -12,19 +14,15 @@ pub const ParsingError = error{
 };
 
 pub const Parser = struct {
-    fn split_name_and_value(string: []const u8) ParsingError!metric.Metric {
+    fn split_name_and_value(allocator: std.mem.Allocator, string: []const u8) !Metric {
         var iterator = std.mem.splitSequence(u8, string, ":");
         var part: ?[]const u8 = iterator.next();
-        var rv: metric.Metric = metric.Metric{
-            .name = "",
-            .value = 0.0,
-            .type = .Unknown,
-            .tags = null,
-        };
+        var rv: Metric = undefined;
         var idx: u8 = 0;
         while (part != null) {
             if (idx == 0) {
-                rv.name = part.?;
+                rv = try Metric.init(allocator, part.?);
+                errdefer rv.deinit();
                 idx += 1;
             } else if (idx == 1) {
                 if (std.fmt.parseFloat(f32, part.?)) |value| {
@@ -42,11 +40,11 @@ pub const Parser = struct {
         return rv;
     }
 
-    pub fn parse_packet(allocator: std.mem.Allocator, metric_packet: Packet) !std.ArrayList(metric.Metric) {
+    pub fn parse_packet(allocator: std.mem.Allocator, metric_packet: Packet) !std.ArrayList(Metric) {
         var iterator = std.mem.splitSequence(u8, metric_packet.payload[0..metric_packet.len], "\n");
         var part: ?[]const u8 = iterator.next();
 
-        var rv = std.ArrayList(metric.Metric).init(allocator);
+        var rv = std.ArrayList(Metric).init(allocator);
         errdefer rv.deinit();
 
         while (part != null) {
@@ -54,7 +52,7 @@ pub const Parser = struct {
                 part = iterator.next();
                 continue;
             }
-            const m: metric.Metric = try parse_metric(allocator, part.?);
+            const m: Metric = try parse_metric(allocator, part.?);
             try rv.append(m);
             part = iterator.next();
         }
@@ -62,29 +60,22 @@ pub const Parser = struct {
         return rv;
     }
 
-    pub fn parse_metric(allocator: std.mem.Allocator, packet: []const u8) !metric.Metric {
+    pub fn parse_metric(allocator: std.mem.Allocator, packet: []const u8) !Metric {
         var iterator = std.mem.splitSequence(u8, packet, "|");
         var part: ?[]const u8 = iterator.next();
+        var rv: Metric = undefined;
+
         var idx: u8 = 0;
-
-        var rv: metric.Metric = metric.Metric{
-            .name = undefined,
-            .value = 0.0,
-            .type = .Unknown,
-            .tags = null,
-        };
-
         while (part != null) {
             switch (idx) {
                 0 => {
                     // name and value
-                    const nv: metric.Metric = try split_name_and_value(part.?);
-                    rv.name = nv.name;
-                    rv.value = nv.value;
+                    rv = try split_name_and_value(allocator, part.?);
                 },
                 1 => {
                     rv.type = switch (part.?[0]) {
                         'c' => .Counter,
+                        'd' => .Distribution,
                         'g' => .Gauge,
                         else => .Unknown,
                     };
@@ -101,6 +92,7 @@ pub const Parser = struct {
                     return ParsingError.MalformedPacket;
                 },
             }
+
             idx += 1;
             part = iterator.next();
         }
@@ -112,20 +104,20 @@ pub const Parser = struct {
         return rv;
     }
 
-    pub fn parse_tags(allocator: std.mem.Allocator, buffer: []const u8) anyerror!metric.Tags {
-        var rv = metric.Tags.init(allocator);
-        errdefer rv.deinit();
+    pub fn parse_tags(allocator: std.mem.Allocator, buffer: []const u8) !TagsSetUnmanaged {
+        var rv: TagsSetUnmanaged = .empty;
+        errdefer rv.deinit(allocator);
+
         if (buffer[0] != '#') {
             return ParsingError.MalformedTags;
         }
         var iterator = std.mem.splitSequence(u8, buffer[1..buffer.len], ",");
         var part: ?[]const u8 = iterator.next();
-        while (part != null) {
-            try rv.append(part.?);
-            part = iterator.next();
+        while (part != null) : (part = iterator.next()) {
+            try rv.appendCopy(allocator, part.?);
         }
 
-        std.sort.insertion([]const u8, rv.items, {}, lessThanTags);
+        std.sort.insertion([]const u8, rv.tags.items, {}, lessThanTags);
         return rv;
     }
 
@@ -137,19 +129,32 @@ pub const Parser = struct {
 test "split_name_and_value" {
     const packet = "hello:5.0";
 
-    const m = try Parser.split_name_and_value(packet);
+    const m = try Parser.split_name_and_value(std.testing.allocator, packet);
     assert(std.mem.eql(u8, m.name, "hello"));
     assert(m.value == 5.0);
+    m.deinit(std.testing.allocator);
 }
 
 test "parse_metric" {
-    const packet = "hello:5.0|c|#tags:hello";
+    const allocator = std.testing.allocator;
+    var buf = std.ArrayList(u8).init(allocator);
+    try buf.appendSlice("hello:5.0|c|#tags:hello");
+    defer buf.deinit();
+    const packet = buf.items;
 
-    var m = try Parser.parse_metric(std.testing.allocator, packet);
+    const m = try Parser.parse_metric(std.testing.allocator, packet);
     assert(std.mem.eql(u8, m.name, "hello"));
     assert(m.value == 5.0);
 
-    m.tags.deinit();
+    // here we're modifying the packet, and validating
+    // that the metric data has not changed, i.e., is not
+    // relying on the packet buffer but on its own.
+    buf.items[0] = 'a';
+    assert(std.mem.eql(u8, m.name, "hello"));
+
+    if (m.tags) |tags| {
+        tags.deinit();
+    }
 }
 
 test "parse_tags" {

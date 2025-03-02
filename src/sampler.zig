@@ -6,145 +6,185 @@ const assert = std.debug.assert;
 
 const metric = @import("metric.zig");
 const Config = @import("config.zig").Config;
+const DDSketch = @import("ddsketch.zig").DDSketch;
 const Parser = @import("parser.zig").Parser; // used in tests
 const Forwarder = @import("forwarder.zig").Forwarder;
+const TagsSetUnmanaged = @import("metric.zig").TagsSetUnmanaged;
 const Transaction = @import("forwarder.zig").Transaction;
 
-pub const Sample = struct {
-    metric_name: []u8,
+pub const Serie = struct {
+    metric_name: []const u8,
     metric_type: metric.MetricType,
-    tags: ?metric.Tags,
+    tags: TagsSetUnmanaged,
     samples: u64,
     value: f32,
+
+    pub fn deinit(self: *Serie, allocator: std.mem.Allocator) void {
+        self.tags.deinit(allocator);
+    }
 };
 
+pub const Distribution = struct {
+    metric_name: []const u8,
+    tags: TagsSetUnmanaged,
+    sketch: DDSketch,
+
+    pub fn deinit(self: *Distribution, allocator: std.mem.Allocator) void {
+        self.tags.deinit(allocator);
+        self.sketch.deinit();
+    }
+};
+
+// TODO(remy): comment me
 pub const Sampler = struct {
-    allocator: std.mem.Allocator,
+    arena: std.heap.ArenaAllocator,
     config: Config,
     forwarder: Forwarder,
-    map: std.AutoHashMap(u64, Sample),
+
+    series: std.AutoHashMapUnmanaged(u64, Serie),
+    // TODO(remy): benchmark against std.AutoHashMapUnmanaged
+    distributions: std.AutoArrayHashMapUnmanaged(u64, Distribution),
+
     mutex: std.Thread.Mutex,
 
-    pub fn init(allocator: std.mem.Allocator, config: Config) !Sampler {
+    pub fn init(gpa: std.mem.Allocator, config: Config) !Sampler {
         return Sampler{
-            .allocator = allocator,
+            .arena = std.heap.ArenaAllocator.init(gpa),
             .config = config,
-            .forwarder = try Forwarder.init(allocator, config),
-            .map = std.AutoHashMap(u64, Sample).init(allocator),
+            .forwarder = try Forwarder.init(gpa, config),
+            .series = .empty,
+            .distributions = .empty,
             .mutex = std.Thread.Mutex{},
         };
     }
 
+    // TODO(remy): with a LockType parameter on the `sample` function, we can remove
+    // the lock usage from the happy path.
     pub fn sample(self: *Sampler, m: metric.Metric) !void {
         const h = Sampler.hash(m);
-        const k = self.map.get(h);
-        if (k) |s| {
-            var newSample = Sample{
-                .metric_name = s.metric_name,
-                .metric_type = s.metric_type,
-                .tags = s.tags,
-                .samples = s.samples + 1,
-                .value = s.value,
-            };
-            switch (s.metric_type) {
-                .Gauge => {
-                    newSample.value = m.value;
-                },
-                // Counter & Unknown
-                else => {
-                    newSample.value += m.value;
-                },
-            }
+
+        if (m.type == .Distribution) {
+            return self.sampleDistribution(m, h);
+        }
+
+        return self.sampleSerie(m, h);
+    }
+
+    pub fn sampleDistribution(self: *Sampler, m: metric.Metric, h: u64) !void {
+        self.mutex.lock();
+        const k = self.distributions.get(h);
+        self.mutex.unlock();
+
+        if (k) |d| {
+            // existing
+            var newDistribution = d;
+            try newDistribution.sketch.insert(@floatCast(m.value));
             self.mutex.lock();
-            defer self.mutex.unlock();
-            try self.map.put(h, newSample);
+            try self.distributions.put(self.arena.allocator(), h, newDistribution);
+            self.mutex.unlock();
+            return;
+        }
+
+        // not existing
+
+        const name = try self.arena.allocator().alloc(u8, m.name.len);
+        std.mem.copyForwards(u8, name, m.name);
+
+        // TODO(remy): could we steal these tags from the metric instead?
+        var tags = TagsSetUnmanaged.empty;
+        for (m.tags.tags.items) |tag| {
+            try tags.appendCopy(self.arena.allocator(), tag);
+        }
+
+        const sketch = DDSketch.initDefault(self.arena.allocator());
+
+        self.mutex.lock();
+        try self.distributions.put(self.arena.allocator(), h, Distribution{
+            .metric_name = name,
+            .tags = tags,
+            .sketch = sketch,
+        });
+        self.mutex.unlock();
+        return;
+    }
+
+    pub fn sampleSerie(self: *Sampler, m: metric.Metric, h: u64) !void {
+        self.mutex.lock();
+        const k = self.series.get(h);
+        self.mutex.unlock();
+        if (k) |s| {
+            var newSerie = s;
+            newSerie.samples += 1;
+
+            switch (s.metric_type) {
+                .Gauge => newSerie.value = m.value,
+                else => newSerie.value += m.value, // Counter
+            }
+
+            self.mutex.lock();
+            try self.series.put(self.arena.allocator(), h, newSerie);
+            self.mutex.unlock();
             return;
         }
 
         // not existing, put it in the sampler
 
-        const name = try self.allocator.alloc(u8, m.name.len);
-        var tags = metric.Tags.init(self.allocator);
-        if (m.tags) |metric_tags| {
-            for (metric_tags.items) |tag| {
-                const tag_copy = try self.allocator.alloc(u8, tag.len);
-                std.mem.copyForwards(u8, tag_copy, tag);
-                try tags.append(tag_copy);
-            }
+        const name = try self.arena.allocator().alloc(u8, m.name.len);
+        std.mem.copyForwards(u8, name, m.name);
+
+        // TODO(remy): instead of copying, could we steal these tags from the metric?
+        var tags = TagsSetUnmanaged.empty;
+        for (m.tags.tags.items) |tag| {
+            try tags.appendCopy(self.arena.allocator(), tag);
         }
 
-        std.mem.copyForwards(u8, name, m.name);
         self.mutex.lock();
-        defer self.mutex.unlock();
-        try self.map.put(h, Sample{
+        try self.series.put(self.arena.allocator(), h, Serie{
             .metric_name = name,
             .metric_type = m.type,
             .samples = 1,
             .tags = tags,
             .value = m.value,
         });
+        self.mutex.unlock();
     }
 
     pub fn size(self: *Sampler) usize {
-        return self.map.count();
+        return self.series.count() + self.distributions.count();
     }
 
+    // TODO(remy): let's not reset the arena on every flush
+    // note that if we don't reset the arena on every flush,
+    // we'll then have to reset the series & distributions
+    // maps in some way (retaining capacity?).
     pub fn flush(self: *Sampler) !void {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        try self.forwarder.flush(self.allocator, self.config, &self.map);
+        try self.forwarder.flush(self.series, self.distributions);
 
-        // release the memory used for all metrics names, tags and reset the map
-        var it = self.map.iterator();
-        while (it.next()) |kv| {
-            self.allocator.free(kv.value_ptr.*.metric_name);
-            if (kv.value_ptr.*.tags) |tags| {
-                for (tags.items) |tag| {
-                    self.allocator.free(tag);
-                }
-                tags.deinit();
-            }
-        }
-        self.map.deinit();
-        self.map = std.AutoHashMap(u64, Sample).init(self.allocator);
+        self.series = .empty;
+        self.distributions = .empty;
+        _ = self.arena.reset(.free_all); // TODO(remy): look into retaining capacity
     }
 
     /// destroy frees all the memory used by the Sampler and the instance itself.
     /// The Sampler instance should not be used anymore after a call to destroy.
     pub fn deinit(self: *Sampler) void {
-        // release the memory used for all metrics names
-        var it = self.map.iterator();
-        while (it.next()) |kv| {
-            self.allocator.free(kv.value_ptr.*.metric_name);
-            if (kv.value_ptr.*.tags) |tags| {
-                for (tags.items) |tag| {
-                    self.allocator.free(tag);
-                }
-                tags.deinit();
-            }
-        }
-        self.forwarder.deinit();
-        self.map.deinit();
-    }
+        self.mutex.lock();
+        defer self.mutex.unlock();
 
-    // TODO(remy): debug method, remove?
-    pub fn dump(self: *Sampler) void {
-        var it = self.map.iterator();
-        while (it.next()) |kv| {
-            const s = kv.*.value;
-            std.log.debug("{d}: {} ({c}): {d}", .{ kv.*.key, s.metric_name, s.metric_type, s.value });
-        }
+        self.series.deinit(self.arena.allocator());
+        self.distributions.deinit(self.arena.allocator());
+        self.arena.deinit();
+        self.forwarder.deinit();
     }
 
     fn hash(m: metric.Metric) u64 {
         var h = fnv1a.init();
         h.update(m.name);
-        var i: usize = 0;
-        if (m.tags) |tags| {
-            while (i < tags.items.len) : (i += 1) {
-                h.update(tags.items[i]);
-            }
+        for (m.tags.tags.items) |tag| {
+            h.update(tag);
         }
         return h.final();
     }
@@ -205,19 +245,19 @@ test "sampling gauge" {
     try Sampler.sample(sampler, m);
     assert(Sampler.size(sampler) == 1);
 
-    var iterator = sampler.map.iterator();
+    var iterator = sampler.series.iterator();
     if (iterator.next()) |kv| {
-        const sample = kv.value_ptr.*;
-        assert(sample.value == 50.0);
+        const serie = kv.value_ptr.*;
+        assert(serie.value == 50.0);
     }
 
     m.value = 20;
 
     try Sampler.sample(sampler, m);
-    iterator = sampler.map.iterator();
+    iterator = sampler.series.iterator();
     if (iterator.next()) |kv| {
-        const sample = kv.value_ptr.*;
-        assert(sample.value == 20.0);
+        const serie = kv.value_ptr.*;
+        assert(serie.value == 20.0);
     }
 
     sampler.deinit();
@@ -235,21 +275,21 @@ test "sampling counter" {
     try Sampler.sample(sampler, m);
     assert(Sampler.size(sampler) == 1);
 
-    var iterator = sampler.map.iterator();
+    var iterator = sampler.series.iterator();
     if (iterator.next()) |kv| {
-        const sample = kv.value_ptr.*;
-        assert(sample.value == 50.0);
-        assert(sample.samples == 1);
+        const serie = kv.value_ptr.*;
+        assert(serie.value == 50.0);
+        assert(serie.samples == 1);
     }
 
     m.value = 20;
 
     try Sampler.sample(sampler, m);
-    iterator = sampler.map.iterator();
+    iterator = sampler.series.iterator();
     if (iterator.next()) |kv| {
-        const sample = kv.value_ptr.*;
-        assert(sample.value == 70.0);
-        assert(sample.samples == 2);
+        const serie = kv.value_ptr.*;
+        assert(serie.value == 70.0);
+        assert(serie.samples == 2);
     }
 
     sampler.deinit();

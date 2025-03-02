@@ -1,15 +1,17 @@
 # statsd-zig
 
-Basic DogStatsD UDP/UDS server supporting gauges and counters and sending these
-metrics to Datadog.
-
-Uses `epoll` on Linux, `kqueue` on macOS.
+Basic DogStatsD UDP/UDS server supporting gauges, counters and distributions
+and sending these metrics to Datadog.
 
 ## Getting started
 
-- `libcurl` must be available on the system
-- Build the binary with `zig build` (build with Zig `0.14.0-dev.3222`)
+- `libcurl` must be available on the system on macOS
+- Build the binary with `zig build` (build with Zig `0.14.0`)
 - Set the environment variables `APIKEY` and `HOSTNAME` to configure the daemon
+
+## Socket
+
+Uses `epoll` on Linux, `kqueue` on macOS. 
 
 ### With UDP
 

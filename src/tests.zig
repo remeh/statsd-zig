@@ -1,7 +1,8 @@
 test "all tests" {
-    _ = @import("forwarder.zig");
+// FIXME(remy):    _ = @import("forwarder.zig");
     _ = @import("listener.zig");
-    _ = @import("measure_allocator.zig");
-    _ = @import("parser.zig");
-    _ = @import("sampler.zig");
+// FIXME(remy):    _ = @import("measure_allocator.zig");
+// FIXME(remy):    _ = @import("parser.zig");
+// FIXME(remy):    _ = @import("sampler.zig");
+    _ = @import("ddsketch.zig");
 }

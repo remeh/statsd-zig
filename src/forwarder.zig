@@ -1,15 +1,29 @@
 const std = @import("std");
+const builtin = @import("builtin");
+
 const c = @cImport(@cInclude("curl/curl.h"));
 
-const Sample = @import("sampler.zig").Sample;
+const Distribution = @import("sampler.zig").Distribution;
+const Serie = @import("sampler.zig").Serie;
 const Config = @import("config.zig").Config;
 const metric = @import("metric.zig");
+const protobuf = @import("protobuf.zig");
 
-//const series_endpoint = "https://agent.datadoghq.com/api/v1/series";
-const series_endpoint = "http://localhost:8080";
+const series_endpoint = "https://agent.datadoghq.com/api/v1/series";
+const sketches_endpoint = "https://agent.datadoghq.com/api/beta/sketches";
+//const series_endpoint = "http://localhost:8080";
+//const sketches_endpoint = "http://localhost:8080";
+
+const headerContentTypeJson: [*:0]const u8 = "Content-Type: application/json";
+const headerContentTypeProto: [*:0]const u8 = "Content-Type: application/x-protobuf";
+
+const compressionType = enum {
+    Gzip,
+    Zlib,
+};
 
 const max_retry_per_transaction = 5;
-// TODO(remy): instead of limiting on the amount of transactions, we could limit
+// TODO(remy): instead of limiting on the amount of transactions, we should limit
 // on the RAM usage of these stored transactions, i.e. max_stored_transactions_ram_usage
 // or something like this.
 const max_stored_transactions = 10;
@@ -21,16 +35,27 @@ pub const ForwarderError = error{RequestFailed};
 /// time to do some retries.
 pub const Transaction = struct {
     allocator: std.mem.Allocator,
+    compression_type: compressionType = .Zlib,
+    // TODO(remy): when not using curl anymore, these ones won't have to be finished by a \0
+    content_type: [*:0]const u8,
+    // TODO(remy): when not using curl anymore, these ones won't have to be finished by a \0
+    url: [*:0]const u8,
     data: std.ArrayList(u8),
     creation_time: i64, // unit: ms
     tries: u8,
 
-    pub fn init(allocator: std.mem.Allocator, creation_time: i64) !*Transaction {
-        var rv = try allocator.create(Transaction);
-        rv.allocator = allocator;
-        rv.data = std.ArrayList(u8).init(allocator);
-        rv.creation_time = creation_time;
-        rv.tries = 0;
+    // TODO(remy): this shouldn't return a pointer
+    pub fn init(allocator: std.mem.Allocator, url: [*:0]const u8, content_type: [*:0]const u8, compression_type: compressionType, creation_time: i64) !*Transaction {
+        const rv = try allocator.create(Transaction);
+        rv.* = Transaction{
+            .allocator = allocator,
+            .content_type = content_type,
+            .compression_type = compression_type,
+            .data = std.ArrayList(u8).init(allocator),
+            .creation_time = creation_time,
+            .tries = 0,
+            .url = url,
+        };
         return rv;
     }
 
@@ -42,36 +67,45 @@ pub const Transaction = struct {
     pub fn compress(self: *Transaction) !void {
         var compressed = std.ArrayList(u8).init(self.allocator);
         var reader = std.io.fixedBufferStream(self.data.items);
-        try std.compress.zlib.compress(reader.reader(), compressed.writer(), .{});
+        switch (self.compression_type) {
+            .Gzip => try std.compress.gzip.compress(reader.reader(), compressed.writer(), .{}),
+            .Zlib => try std.compress.zlib.compress(reader.reader(), compressed.writer(), .{}),
+        }
         self.data.deinit();
         self.data = compressed;
     }
 };
 
 pub const Forwarder = struct {
-    allocator: std.mem.Allocator,
+    gpa: std.mem.Allocator,
     config: Config,
     consts: struct {
-        series_url: [:0]const u8,
         apikey_header: [:0]const u8,
+        series_url: [:0]const u8,
+        sketches_url: [:0]const u8,
     },
+    // TODO(remy): this could be a specific type owning all the transactions memory
+    //             and having all of them stored in an arena managed by the type instead.
     transactions: std.ArrayList(*Transaction),
 
-    pub fn init(allocator: std.mem.Allocator, config: Config) !Forwarder {
+    pub fn init(gpa: std.mem.Allocator, config: Config) !Forwarder {
         return .{
-            .allocator = allocator,
+            .gpa = gpa,
             .config = config,
             .consts = .{
-                .series_url = try std.fmt.allocPrintZ(allocator, "{s}?api_key={s}", .{ series_endpoint, config.apikey }),
-                .apikey_header = try std.fmt.allocPrintZ(allocator, "Dd-Api-Key: {s}", .{config.apikey}),
+                .apikey_header = try std.fmt.allocPrintZ(gpa, "Dd-Api-Key: {s}", .{config.apikey}),
+                .series_url = try std.fmt.allocPrintZ(gpa, "{s}?api_key={s}", .{ series_endpoint, config.apikey }),
+                .sketches_url = try std.fmt.allocPrintZ(gpa, "{s}?api_key={s}", .{ sketches_endpoint, config.apikey }),
             },
-            .transactions = std.ArrayList(*Transaction).init(allocator),
+            // TODO(remy): maybe an arena dedicated to transactions?
+            .transactions = std.ArrayList(*Transaction).init(gpa),
         };
     }
 
     pub fn deinit(self: *Forwarder) void {
-        self.allocator.free(self.consts.apikey_header);
-        self.allocator.free(self.consts.series_url);
+        self.gpa.free(self.consts.apikey_header);
+        self.gpa.free(self.consts.series_url);
+        self.gpa.free(self.consts.sketches_url);
         for (self.transactions.items) |tx| {
             tx.deinit();
         }
@@ -79,35 +113,24 @@ pub const Forwarder = struct {
     }
 
     /// flush is responsible for sending all the given metrics to some HTTP route.
-    /// It owns the list of metrics and is responsible for freeing its memory.
-    pub fn flush(self: *Forwarder, allocator: std.mem.Allocator, config: Config, samples: *std.AutoHashMap(u64, Sample)) !void {
+    pub fn flush(self: *Forwarder, series: std.AutoHashMapUnmanaged(u64, Serie), dists: std.AutoArrayHashMapUnmanaged(u64, Distribution)) !void {
         defer std.log.debug("transactions stored in RAM: {}", .{self.transactions.items.len});
 
         // try to send a new transaction only if there is metrics to send
         // ---
-        if (samples.count() > 0) {
-            const tx = try create_transaction(allocator, config, samples, std.time.milliTimestamp());
 
-            // try to send the transaction
-            self.send_http_request(tx) catch |err| {
-                std.log.warn("can't send a transaction: {s}\nstoring the transaction of size {d} bytes [{s}]", .{ @errorName(err), tx.data.items.len, tx.data.items });
+        if (series.count() > 0) {
+            const tx = try self.create_series_transaction(series, std.time.milliTimestamp());
+            if (self.send_transaction(tx)) {
+                tx.deinit();
+            }
+        }
 
-                // limit the amount of transactions stored
-                if (self.transactions.items.len > max_stored_transactions) {
-                    std.log.warn("too many transactions stored, removing a random old one.", .{});
-                    var droppedtx = self.transactions.orderedRemove(0);
-                    droppedtx.deinit();
-                }
-
-                self.transactions.append(tx) catch |err2| {
-                    std.log.warn("can't store the failing transaction {s}", .{@errorName(err2)});
-                    tx.deinit();
-                };
-                return;
-            };
-
-            // this transaction succeed, we can deinit it.
-            tx.deinit();
+        if (dists.count() > 0) {
+            const tx = try self.create_sketches_transaction(dists.values(), std.time.milliTimestamp());
+            if (self.send_transaction(tx)) {
+                tx.deinit();
+            }
         }
 
         // try to replay some older transactions.
@@ -119,22 +142,76 @@ pub const Forwarder = struct {
         }
     }
 
-    /// creates a transaction with the given metric samples.
-    fn create_transaction(allocator: std.mem.Allocator, config: Config, samples: *std.AutoHashMap(u64, Sample), creation_time: i64) !*Transaction {
-        var tx = try Transaction.init(allocator, creation_time);
+    // TODO(remy): comment me
+    fn send_transaction(self: *Forwarder, tx: *Transaction) bool {
+        // try to send the transaction
+        self.send_http_request(tx) catch |err| {
+            std.log.warn("can't send a transaction: {s}\nstoring the transaction of size {d} bytes [{s}]", .{ @errorName(err), tx.data.items.len, tx.data.items });
+
+            // limit the amount of transactions stored
+            if (self.transactions.items.len > max_stored_transactions) {
+                std.log.warn("too many transactions stored, removing a random old one.", .{});
+                var droppedtx = self.transactions.orderedRemove(0);
+                droppedtx.deinit();
+            }
+
+            self.transactions.append(tx) catch |err2| {
+                std.log.warn("can't store the failing transaction {s}", .{@errorName(err2)});
+                tx.deinit();
+            };
+            return false;
+        };
+
+        return true;
+    }
+
+    /// creates a transaction with the given distribution series.
+    /// This endpoint does not seem to work with Gzip compression.
+    fn create_sketches_transaction(self: *Forwarder, dists: []Distribution, creation_time: i64) !*Transaction {
+        var tx = try Transaction.init(
+            self.gpa,
+            self.consts.sketches_url,
+            headerContentTypeProto,
+            .Zlib,
+            creation_time,
+        );
+
+        // create the protobuf payload
+        var pb = try protobuf.SketchesFromDistributions(self.gpa, self.config, dists);
+        defer pb.deinit();
+        const data = try pb.encode(self.gpa);
+        try tx.data.appendSlice(data); // FIXME(remy): avoid this copy
+        self.gpa.free(data);
+
+        // compress the transaction
+        try tx.compress();
+
+        return tx;
+    }
+
+    /// creates a transaction with the given metric series.
+    /// This endpoint works with both Gzip and Zlib compression.
+    fn create_series_transaction(self: *Forwarder, series: std.AutoHashMapUnmanaged(u64, Serie), creation_time: i64) !*Transaction {
+        var tx = try Transaction.init(
+            self.gpa,
+            self.consts.series_url,
+            headerContentTypeJson,
+            .Gzip,
+            creation_time,
+        );
 
         try tx.data.appendSlice("{\"series\":[");
 
-        // append every sample
+        // append every serie
 
         var first: bool = true;
-        var iterator = samples.*.iterator();
+        var iterator = series.iterator();
         while (iterator.next()) |kv| {
             if (!first) {
                 try tx.data.append(',');
             }
             first = false;
-            try write_sample(allocator, config, tx, kv.value_ptr.*);
+            try self.write_serie(tx, kv.value_ptr.*);
         }
 
         try tx.data.appendSlice("]}");
@@ -169,7 +246,10 @@ pub const Forwarder = struct {
         }
     }
 
-    fn write_sample(allocator: std.mem.Allocator, config: Config, tx: *Transaction, sample: Sample) !void {
+    // TODO(remy): implement a separate serializer
+    // TODO(remy): comment
+    // TODO(remy): unit test
+    fn write_serie(self: *Forwarder, tx: *Transaction, serie: Serie) !void {
         // {
         //   "metric": "system.mem.used",
         //   "points": [
@@ -186,49 +266,57 @@ pub const Forwarder = struct {
         // }
 
         // metric type string
-        const t: []const u8 = switch (sample.metric_type) {
+        const t: []const u8 = switch (serie.metric_type) {
             .Gauge => "gauge",
-            else => "count",
+            .Counter => "count",
+            else => unreachable,
         };
 
         // tags
-        var tags = std.ArrayList(u8).init(allocator);
+        var tags = std.ArrayList(u8).init(self.gpa);
         var i: usize = 0;
-        if (sample.tags) |stags| {
-            for (stags.items) |tag| {
-                try tags.append('"');
-                try tags.appendSlice(tag);
-                try tags.append('"');
-                if (i < stags.items.len - 1) {
-                    try tags.append(',');
-                }
-                i += 1;
+        for (serie.tags.tags.items) |tag| {
+            try tags.append('"');
+            try tags.appendSlice(tag);
+            try tags.append('"');
+            if (i < serie.tags.tags.items.len - 1) {
+                try tags.append(',');
             }
+            i += 1;
         }
         defer tags.deinit();
 
         // build the json
         const json = try std.fmt.allocPrint(
-            allocator,
+            self.gpa,
             "{{\"metric\":\"{s}\",\"host\":\"{s}\",\"tags\":[{s}],\"type\":\"{s}\",\"points\":[[{d},{d}]],\"interval\":0,\"source_type_name\":\"System\"}}",
             .{
-                sample.metric_name,
-                config.hostname,
+                serie.metric_name,
+                self.config.hostname,
                 tags.items,
                 t,
                 @divTrunc(std.time.milliTimestamp(), 1000),
-                sample.value,
+                serie.value,
             },
         );
-        defer allocator.free(json);
+        defer self.gpa.free(json);
 
         // append it to the main buffer
         try tx.*.data.appendSlice(json);
     }
 
-    // TODO(remy): do not alloc the endpoint
-    // TODO(remy): do not alloc the api key header
     fn send_http_request(self: *Forwarder, tx: *Transaction) !void {
+        if (self.config.force_curl) {
+            return self.send_http_request_curl(tx);
+        }
+
+        switch (builtin.os.tag) {
+            .linux => return self.send_http_request_native(tx),
+            else => return self.send_http_request_curl(tx),
+        }
+    }
+
+    fn send_http_request_curl(self: *Forwarder, tx: *Transaction) !void {
         var failed: bool = false;
         var curl: ?*c.CURL = null;
         var res: c.CURLcode = undefined;
@@ -237,7 +325,7 @@ pub const Forwarder = struct {
         curl = c.curl_easy_init();
         if (curl != null) {
             // url
-            _ = c.curl_easy_setopt(curl, c.CURLOPT_URL, @as([*:0]const u8, @ptrCast(self.consts.series_url)));
+            _ = c.curl_easy_setopt(curl, c.CURLOPT_URL, @as([*:0]const u8, @ptrCast(tx.url)));
 
             // body
             _ = c.curl_easy_setopt(curl, c.CURLOPT_POSTFIELDSIZE, tx.data.items.len);
@@ -245,10 +333,20 @@ pub const Forwarder = struct {
             _ = c.curl_easy_setopt(curl, c.CURLOPT_POSTFIELDS, @as([*:0]const u8, @ptrCast(tx.data.items)));
 
             // http headers
-            headers = c.curl_slist_append(headers, "Content-Type: application/json");
-            headers = c.curl_slist_append(headers, "Content-Encoding: deflate");
-            headers = c.curl_slist_append(headers, "User-Agent: datadog-agent/7.64.0-devel+git.105.dde2fc2");
-            headers = c.curl_slist_append(headers, @as([*:0]const u8, @ptrCast(self.consts.apikey_header)));
+            headers = c.curl_slist_append(headers, tx.content_type);
+            headers = c.curl_slist_append(headers, "DD-Agent-Payload: 4.87.0"); // TODO(remy): document me
+            headers = c.curl_slist_append(headers, "DD-Agent-Version: 7.40.0"); // TODO(remy): document me
+            switch (tx.compression_type) {
+                .Gzip => headers = c.curl_slist_append(headers, "Content-Encoding: gzip"),
+                // When using zlib compression, the Content-Encoding header should
+                // have the `deflate`  value...
+                // https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Encoding
+                // Don't ask my why it's not the deflate compression who uses the deflate value,
+                // I don't make the rules.
+                .Zlib => headers = c.curl_slist_append(headers, "Content-Encoding: deflate"),
+            }
+            headers = c.curl_slist_append(headers, "User-Agent: datadog-agent/7.40.0");
+            headers = c.curl_slist_append(headers, self.consts.apikey_header);
             _ = c.curl_easy_setopt(curl, c.CURLOPT_HTTPHEADER, headers);
 
             // perform the call
@@ -270,6 +368,60 @@ pub const Forwarder = struct {
             std.log.debug("http flush done, request payload size: {}", .{tx.data.items.len});
         }
     }
+
+    fn send_http_request_native(self: *Forwarder, tx: *Transaction) !void {
+        // http client
+        var http_client = std.http.Client{ .allocator = self.gpa };
+        defer http_client.deinit();
+
+        // response
+        var resp = std.ArrayList(u8).init(self.gpa);
+        defer resp.deinit();
+
+        // TODO(remy): remove me when not supporting curl anymore
+        const url = tx.url[0..std.mem.len(tx.url)];
+        const content_type = tx.content_type[0..std.mem.len(tx.content_type)];
+
+        const req_opts = std.http.Client.FetchOptions{
+            .location = .{ .uri = try std.Uri.parse(url) },
+            .method = .POST,
+            // .redirect_behavior = .unhandled,
+            .payload = tx.data.items,
+            .response_storage = .{ .dynamic = &resp },
+            // FIXME(remy): compression header
+            .extra_headers = &.{
+                std.http.Header{ .name = "Dd-Api-Key", .value = self.config.apikey },
+                std.http.Header{ .name = "Content-Type", .value = content_type },
+                std.http.Header{ .name = "DD-Agent-Payload", .value = "4.87.0" }, // TODO(remy): document me
+                std.http.Header{ .name = "DD-Agent-Version", .value = "7.40.0" }, // TODO(remy): document me
+                std.http.Header{
+                    .name = "Content-Encoding",
+                    .value = switch (tx.compression_type) {
+                        .Gzip => "gzip",
+                        // When using zlib compression, the HTTP Content-Encoding header should
+                        // have the value `deflate`...
+                        // https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Encoding
+                        // Don't ask my why it's not the deflate compression who uses the deflate value,
+                        // I don't make the rules.
+                        .Zlib => "deflate",
+                    },
+                },
+                std.http.Header{ .name = "User-Agent", .value = "datadog-agent/7.40.0" },
+            },
+        };
+
+        const r = http_client.fetch(req_opts) catch |err| {
+            std.log.err("send_http_request_native: on fetch: {}", .{err});
+            return;
+        };
+
+        switch (r.status) {
+            .ok, .accepted => {},
+            else => {
+                std.log.err("send_http_request_native: http response error: {any}", .{r.status});
+            },
+        }
+    }
 };
 
 test "transaction_mem_usage" {
@@ -277,7 +429,7 @@ test "transaction_mem_usage" {
     const name = try allocator.alloc(u8, "my.metric".len);
     std.mem.copyForwards(u8, name, "my.metric");
 
-    const sample = Sample{
+    const serie = Serie{
         .metric_name = name,
         .metric_type = .Gauge,
         .samples = 1,
@@ -292,13 +444,13 @@ test "transaction_mem_usage" {
         .uds = false,
     };
 
-    var samples = std.AutoHashMap(u64, Sample).init(allocator);
-    try samples.put(123456789, sample);
+    var series = std.AutoHashMap(u64, Serie).init(allocator);
+    try series.put(123456789, serie);
 
-    var tx = try Forwarder.create_transaction(allocator, config, &samples, 0);
+    var tx = try Forwarder.create_transaction(allocator, config, &series, 0);
     tx.deinit();
 
-    samples.deinit();
+    series.deinit();
     allocator.free(name);
 }
 
@@ -306,14 +458,14 @@ test "transaction_mem_usage" {
 
 // TODO(remy): add a test for some json complete serialization
 
-test "write_sample_test" {
+test "write_serie_test" {
     const allocator = std.testing.allocator;
     var tx = try Transaction.init(allocator, 0);
 
     const name = try allocator.alloc(u8, "my.metric".len);
     std.mem.copyForwards(u8, name, "my.metric");
 
-    const sample = Sample{
+    const serie = Serie{
         .metric_name = name,
         .metric_type = .Gauge,
         .samples = 1,
@@ -328,7 +480,7 @@ test "write_sample_test" {
         .uds = false,
     };
 
-    try Forwarder.write_sample(allocator, config, tx, sample);
+    try Forwarder.write_sample(allocator, config, tx, serie);
     tx.deinit();
 
     allocator.free(name);

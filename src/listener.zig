@@ -1,7 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const metric = @import("metric.zig");
+const Metric = @import("metric.zig").Metric;
+const MetricType = @import("metric.zig").MetricType;
 const ThreadContext = @import("main.zig").ThreadContext;
 
 pub const Packet = struct {
@@ -147,15 +148,16 @@ pub fn listener(context: *ThreadContext) !void {
             last_drop_message = std.time.milliTimestamp();
             std.log.info("listener drops: {d}/s ({d} last {d}s)", .{ @divTrunc(drops, @divTrunc(tmp, 1000)), drops, 10 });
             // TODO(remy): some function in sampler here
-            //            const m = metric.Metric{
-            //                .name = "statsd.listener.packet_drop",
-            //                .value = @floatFromInt(drops),
-            //                .type = .Counter,
-            //                .tags = null,
-            //            };
-            //            context.sampler.sample(m) catch |err| {
-            //                std.log.err("can't report parser telemetry: {}", .{err});
-            //            };
+            const m = Metric{
+                .allocator = undefined,
+                .name = "statsd.listener.packets_drop",
+                .value = @floatFromInt(drops),
+                .type = .Counter,
+                .tags = .empty,
+            };
+            context.sampler.sample(m) catch |err| {
+                std.log.err("can't report parser telemetry: {}", .{err});
+            };
 
             drops = 0;
         }

@@ -11,6 +11,7 @@ pub const Config = struct {
     apikey: []const u8,
     max_mem_mb: u32,
     uds: bool,
+    force_curl: bool,
 
     pub fn read() ConfigError!Config {
         const apikey = std.posix.getenv("APIKEY");
@@ -38,8 +39,14 @@ pub const Config = struct {
             uds = true;
         }
 
+        var force_curl: bool = false;
+        if (std.posix.getenv("FORCE_CURL") != null) {
+            force_curl = true;
+        }
+
         return Config{
             .apikey = apikey.?,
+            .force_curl = force_curl,
             .hostname = hostname.?,
             .max_mem_mb = max_mem_value,
             .uds = uds,

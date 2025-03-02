@@ -74,13 +74,17 @@ pub fn main() !void {
     const config = try Config.read();
 
     // create the sampler
+    // -----------------
+
     var sampler = try Sampler.init(gpa.allocator(), config);
     defer sampler.deinit();
 
-    // shared context
+    // shared context between the threads
+    // ---------------------------------
+
     var tx = ThreadContext{
         .q = queue,
-        .b = packets_pool,
+        .b = &packets_pool,
         .uds = config.uds,
         .sampler = &sampler,
     };
@@ -90,20 +94,24 @@ pub fn main() !void {
     thread.detach();
 
     // prepare the allocator used by the parser
+    // TODO(remy): move all of this in the parser object
+    // ----------------------------------------
+
     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
     defer arena.deinit();
-    var measure_allocator = MeasureAllocator.init(arena.allocator());
+    var measured_arena = MeasureAllocator.init(arena.allocator());
 
     var next_flush = std.time.milliTimestamp() + flush_frequency;
     var packets_parsed: u32 = 0;
     var metrics_parsed: u32 = 0;
+    var bytes_parsed: u64 = 0;
 
     // pipeline mainloop
     while (true) {
         while (!tx.q.isEmpty()) {
             if (tx.q.get()) |node| {
                 // parse the packets
-                if (Parser.parse_packet(measure_allocator.allocator(), node.data)) |metrics| {
+                if (Parser.parse_packet(measured_arena.allocator(), node.data)) |metrics| {
                     packets_parsed += 1;
                     // sampling
                     var i: usize = 0;
@@ -116,21 +124,16 @@ pub fn main() !void {
                     std.log.err("packet: {s}", .{node.data.payload});
                 }
 
+                bytes_parsed += node.data.len;
+
                 // send this buffer back to the usable queue of buffers
                 tx.b.put(node);
 
-                if (measure_allocator.allocated > config.max_mem_mb * 1024 * 1024) {
+                // TODO(remy): this should be a function of the paresr implementation
+                if (measured_arena.allocated > config.max_mem_mb * 1024 * 1024) {
                     break;
                 }
             }
-        }
-
-        if (measure_allocator.allocated > config.max_mem_mb * 1024 * 1024) {
-            //            std.log.debug("memory arena has reached {}MB, deinit and recreate.", .{measure_allocator.allocated / 1024 / 1024});
-            // free the memory and reset the arena and measure allocator.
-            arena.deinit();
-            arena = std.heap.ArenaAllocator.init(gpa.allocator());
-            measure_allocator = MeasureAllocator.init(arena.allocator());
         }
 
         if (std.time.milliTimestamp() > next_flush) {
@@ -140,14 +143,49 @@ pub fn main() !void {
 
             std.log.info("packets parsed: {d}/s ({d} last {d}s)", .{ @divTrunc(packets_parsed, (flush_frequency / 1000)), packets_parsed, flush_frequency / 1000 });
             std.log.info("metrics parsed: {d}/s ({d} last {d}s)", .{ @divTrunc(metrics_parsed, (flush_frequency / 1000)), metrics_parsed, flush_frequency / 1000 });
-            std.log.info("reporting {d} bytes used by the parser", .{measure_allocator.allocated});
+            std.log.info("reporting {d} bytes used by the parser", .{measured_arena.allocated});
 
-            // TODO(remy): some function in sampler here
-            const m = metric.Metric{
+            // TODO(remy): these must lived in a separate sampler, than can be
+            // used by the listener thread without fearing of slowing down the
+            // overall pipeline (because that separate sampler will need a lock)
+            // with a LockType parameter on the `sample` function, we can remove
+            // the lock usage from the happy path.
+            var m = metric.Metric{
+                .allocator = undefined,
+                .name = "statsd.parser.packets_parsed",
+                .value = @floatFromInt(packets_parsed),
+                .type = .Counter,
+                .tags = .empty,
+            };
+            sampler.sample(m) catch |err| {
+                std.log.err("can't report parser telemetry: {}", .{err});
+            };
+            m = metric.Metric{
+                .allocator = undefined,
+                .name = "statsd.parser.metrics_parsed",
+                .value = @floatFromInt(metrics_parsed),
+                .type = .Counter,
+                .tags = .empty,
+            };
+            sampler.sample(m) catch |err| {
+                std.log.err("can't report parser telemetry: {}", .{err});
+            };
+            m = metric.Metric{
+                .allocator = undefined,
+                .name = "statsd.parser.bytes_parsed",
+                .value = @floatFromInt(bytes_parsed),
+                .type = .Counter,
+                .tags = .empty,
+            };
+            sampler.sample(m) catch |err| {
+                std.log.err("can't report parser telemetry: {}", .{err});
+            };
+            m = metric.Metric{
+                .allocator = undefined,
                 .name = "statsd.parser.bytes_inuse",
-                .value = @floatFromInt(measure_allocator.allocated),
+                .value = @floatFromInt(measured_arena.allocated),
                 .type = .Gauge,
-                .tags = null,
+                .tags = .empty,
             };
             sampler.sample(m) catch |err| {
                 std.log.err("can't report parser telemetry: {}", .{err});
@@ -155,6 +193,7 @@ pub fn main() !void {
 
             packets_parsed = 0;
             metrics_parsed = 0;
+            bytes_parsed = 0;
 
             next_flush = std.time.milliTimestamp() + flush_frequency;
         }
@@ -163,6 +202,15 @@ pub fn main() !void {
 
         if (!running.load(.monotonic)) {
             break;
+        }
+
+        // TODO(remy): move all of this in the parser implementation
+        if (measured_arena.allocated > config.max_mem_mb * 1024 * 1024) {
+            // std.log.debug("memory arena has reached {}MB, deinit and recreate.", .{measure_allocator.allocated / 1024 / 1024});
+            // free the memory and reset the arena and measure allocator.
+            _ = arena.reset(.free_all);
+            measured_arena.parent_allocator = arena.allocator();
+            measured_arena.allocated = 0;
         }
     }
 
