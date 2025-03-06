@@ -165,7 +165,7 @@ pub const DDSketch = struct {
     config: Config,
 
     /// The bins within the sketch.
-    bins: std.ArrayList(Bin),
+    bins: std.ArrayListUnmanaged(Bin),
 
     /// The number of observations within the sketch.
     count: u32,
@@ -186,7 +186,7 @@ pub const DDSketch = struct {
         var rv = DDSketch{
             .allocator = allocator,
             .config = default_config,
-            .bins = std.ArrayList(Bin).init(allocator),
+            .bins = .empty,
             .count = undefined,
             .min = undefined,
             .max = undefined,
@@ -199,7 +199,7 @@ pub const DDSketch = struct {
     }
 
     pub fn deinit(self: *DDSketch) void {
-        self.bins.deinit();
+        self.bins.deinit(self.allocator);
     }
 
     pub fn clear(self: *DDSketch) void {
@@ -208,7 +208,7 @@ pub const DDSketch = struct {
         self.max = std.math.floatMin(f64);
         self.avg = 0.0;
         self.sum = 0.0;
-        self.bins.clearAndFree();
+        self.bins.clearAndFree(self.allocator);
     }
 
     fn adjust_stats(self: *DDSketch, v: f64, n: u32) void {
@@ -230,11 +230,11 @@ pub const DDSketch = struct {
         }
     }
 
-    // TODO(remy): once in the statsd server, do I need this implemention? remove if not?
+    // TODO(remy): once integrated, do I need this implemention? remove if not?
     pub fn insert_keys(self: *DDSketch, keys: []i16) !void {
         std.sort.pdq(i16, keys, {}, std.sort.desc(i16));
 
-        var tmp = std.ArrayList(Bin).init(self.allocator);
+        var tmp = std.ArrayListUnmanaged(Bin).empty;
 
         var sIdx: usize = 0;
         var keyIdx: usize = 0;
@@ -244,30 +244,30 @@ pub const DDSketch = struct {
             const vk = keys[keyIdx];
 
             if (bin.k < vk) {
-                try tmp.append(bin);
+                try tmp.append(self.allocator, bin);
             } else if (bin.k > vk) {
                 const kn = buf_count_leading_equal(keys, keyIdx);
-                try append_safe(&tmp, vk, kn);
+                try append_safe(self.allocator, &tmp, vk, kn);
                 keyIdx += kn;
             } else {
                 const kn = buf_count_leading_equal(keys, keyIdx);
-                try append_safe(&tmp, bin.k, bin.n + kn);
+                try append_safe(self.allocator, &tmp, bin.k, bin.n + kn);
                 sIdx += 1;
                 keyIdx += kn;
             }
         }
 
-        try tmp.appendSlice(self.bins.items[sIdx..]);
+        try tmp.appendSlice(self.allocator, self.bins.items[sIdx..]);
 
         while (keyIdx < keys.len) {
             const kn = buf_count_leading_equal(keys, keyIdx);
-            try append_safe(&tmp, keys[keyIdx], kn);
+            try append_safe(self.allocator, &tmp, keys[keyIdx], kn);
             keyIdx += kn;
         }
 
         try trim_left(self.allocator, &tmp, self.config.bin_limit);
 
-        self.bins.deinit();
+        self.bins.deinit(self.allocator);
         self.bins = tmp;
     }
 
@@ -282,7 +282,7 @@ pub const DDSketch = struct {
         for (self.bins.items) |*bin| {
             if (bin.k == key) {
                 if (bin.n < max_bin_width) {
-                    bin.n += 1; // TODO(remy): should this be modifying the object in the list?
+                    bin.n += 1;
                     return;
                 } else {
                     insert_idx = bin_idx;
@@ -299,23 +299,25 @@ pub const DDSketch = struct {
         }
 
         if (bin_idx == insert_idx) {
-            try self.bins.insert(@intCast(bin_idx), Bin{ .k = key, .n = 1 });
+            try self.bins.insert(self.allocator, @intCast(bin_idx), Bin{ .k = key, .n = 1 });
         } else {
-            try self.bins.append(Bin{ .k = key, .n = 1 });
+            try self.bins.append(self.allocator, Bin{ .k = key, .n = 1 });
         }
 
         try trim_left(self.allocator, &self.bins, self.config.bin_limit);
     }
 
-    // TODO(remy): once in the statsd server, do I need this implementation? remove if not
+    // TODO(remy): once integrated, do I need this implementation? remove if not
     pub fn insert_many(self: *DDSketch, values: []const f64) !void {
-        var keys = try std.ArrayList(i16).initCapacity(self.allocator, values.len);
+        var keys = std.ArrayListUnmanaged(i16).empty;
+        try keys.ensureUnusedCapacity(self.allocator, values.len);
+        defer keys.deinit(self.allocator);
+
         for (values) |value| {
             self.adjust_stats(value, 1);
             keys.appendAssumeCapacity(self.config.key(value));
         }
         try self.insert_keys(keys.items);
-        keys.deinit();
     }
 
     pub fn merge(self: *DDSketch, other: DDSketch) !void {
@@ -334,7 +336,7 @@ pub const DDSketch = struct {
         // merge the bins
         // can't use a StackFallbackAllocator here since this
         // becomes the final ArrayList
-        var merged = std.ArrayList(Bin).init(self.allocator);
+        var merged = std.ArrayListUnmanaged(Bin).empty;
 
         var bins_idx: usize = 0;
         for (other.bins.items) |other_bin| {
@@ -343,21 +345,21 @@ pub const DDSketch = struct {
             while (bins_idx < self.bins.items.len and self.bins.items[bins_idx].k < other_bin.k) {
                 bins_idx += 1;
             }
-            try merged.appendSlice(self.bins.items[start..bins_idx]);
+            try merged.appendSlice(self.allocator, self.bins.items[start..bins_idx]);
 
             if (bins_idx >= self.bins.items.len or self.bins.items[bins_idx].k > other_bin.k) {
-                try merged.append(other_bin);
+                try merged.append(self.allocator, other_bin);
             } else if (self.bins.items[bins_idx].k == other_bin.k) {
                 const n = other_bin.n + self.bins.items[bins_idx].n;
-                try append_safe(&merged, other_bin.k, n);
+                try append_safe(self.allocator, &merged, other_bin.k, n);
                 bins_idx += 1;
             }
         }
 
-        try merged.appendSlice(self.bins.items[bins_idx..]);
+        try merged.appendSlice(self.allocator, self.bins.items[bins_idx..]);
         try trim_left(self.allocator, &merged, self.config.bin_limit);
 
-        self.bins.deinit();
+        self.bins.deinit(self.allocator);
         self.bins = merged;
     }
 
@@ -403,7 +405,7 @@ inline fn rank(count: u32, q: f64) f64 {
     return @round(q * @as(f64, @floatFromInt(count - 1)));
 }
 
-fn trim_left(allocator: std.mem.Allocator, bins: *std.ArrayList(Bin), max_bucket_cap: u16) !void {
+fn trim_left(allocator: std.mem.Allocator, bins: *std.ArrayListUnmanaged(Bin), max_bucket_cap: u16) !void {
     if (max_bucket_cap == 0 or bins.items.len < max_bucket_cap) {
         return;
     }
@@ -411,15 +413,15 @@ fn trim_left(allocator: std.mem.Allocator, bins: *std.ArrayList(Bin), max_bucket
     const n_remove: usize = bins.items.len - max_bucket_cap;
     var missing: u32 = 0;
     var fallback_allocator = std.heap.stackFallback(4, allocator);
-    var overflow = std.ArrayList(Bin).init(fallback_allocator.get());
-    defer overflow.deinit();
+    var overflow = std.ArrayListUnmanaged(Bin).empty;
+    defer overflow.deinit(fallback_allocator.get());
 
     var i: usize = 0;
     while (i < n_remove) : (i += 1) {
         missing += bins.items[i].n;
 
         if (missing > max_bin_width) {
-            try overflow.append(Bin{
+            try overflow.append(fallback_allocator.get(), Bin{
                 .k = bins.items[i].k,
                 .n = max_bin_width,
             });
@@ -431,7 +433,7 @@ fn trim_left(allocator: std.mem.Allocator, bins: *std.ArrayList(Bin), max_bucket
     var bin_remove = bins.items[n_remove];
     missing = bin_remove.increment(missing);
     if (missing > 0) {
-        try append_safe(&overflow, bin_remove.k, missing);
+        try append_safe(fallback_allocator.get(), &overflow, bin_remove.k, missing);
     }
 
     bins.clearRetainingCapacity();
@@ -443,7 +445,7 @@ fn trim_left(allocator: std.mem.Allocator, bins: *std.ArrayList(Bin), max_bucket
     bins.replaceRangeAssumeCapacity(overflow.items.len, bins.items.len - n_remove, bins.items[n_remove..]);
 
     // return bins[:max_bucket_cap+len(overflow)]
-    bins.shrinkAndFree(max_bucket_cap + overflow.items.len);
+    bins.shrinkAndFree(allocator, max_bucket_cap + overflow.items.len);
 }
 
 fn buf_count_leading_equal(a: []const i16, start: usize) usize {
@@ -461,21 +463,21 @@ fn buf_count_leading_equal(a: []const i16, start: usize) usize {
 
 /// appendSafe appends 1 or more bins with the given key safely handing overflow by
 /// inserting multiple buckets when needed.
-fn append_safe(bins: *std.ArrayList(Bin), k: i16, n: usize) !void {
+fn append_safe(allocator: std.mem.Allocator, bins: *std.ArrayListUnmanaged(Bin), k: i16, n: usize) !void {
     if (n <= max_bin_width) {
         const bin = Bin{ .k = k, .n = @intCast(n) };
-        try bins.append(bin);
+        try bins.append(allocator, bin);
         return;
     }
 
     const r: u16 = @intCast(n % max_bin_width);
     if (r != 0) {
-        try bins.append(Bin{ .k = k, .n = r });
+        try bins.append(allocator, Bin{ .k = k, .n = r });
     }
 
     var i: usize = 0;
     while (i < n / max_bin_width) : (i += 1) {
-        try bins.append(Bin{ .k = k, .n = max_bin_width });
+        try bins.append(allocator, Bin{ .k = k, .n = max_bin_width });
     }
 }
 
