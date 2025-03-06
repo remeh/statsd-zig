@@ -40,7 +40,7 @@ pub const Transaction = struct {
     content_type: [*:0]const u8,
     // TODO(remy): when not using curl anymore, these ones won't have to be finished by a \0
     url: [*:0]const u8,
-    data: std.ArrayList(u8),
+    data: std.ArrayListUnmanaged(u8),
     creation_time: i64, // unit: ms
     tries: u8,
 
@@ -51,7 +51,7 @@ pub const Transaction = struct {
             .allocator = allocator,
             .content_type = content_type,
             .compression_type = compression_type,
-            .data = std.ArrayList(u8).init(allocator),
+            .data = .empty,
             .creation_time = creation_time,
             .tries = 0,
             .url = url,
@@ -60,18 +60,18 @@ pub const Transaction = struct {
     }
 
     pub fn deinit(self: *Transaction) void {
-        self.data.deinit();
+        self.data.deinit(self.allocator);
         self.allocator.destroy(self);
     }
 
     pub fn compress(self: *Transaction) !void {
-        var compressed = std.ArrayList(u8).init(self.allocator);
+        var compressed = std.ArrayListUnmanaged(u8).empty;
         var reader = std.io.fixedBufferStream(self.data.items);
         switch (self.compression_type) {
-            .Gzip => try std.compress.gzip.compress(reader.reader(), compressed.writer(), .{}),
-            .Zlib => try std.compress.zlib.compress(reader.reader(), compressed.writer(), .{}),
+            .Gzip => try std.compress.gzip.compress(reader.reader(), compressed.writer(self.allocator), .{}),
+            .Zlib => try std.compress.zlib.compress(reader.reader(), compressed.writer(self.allocator), .{}),
         }
-        self.data.deinit();
+        self.data.deinit(self.allocator);
         self.data = compressed;
     }
 };
@@ -86,7 +86,7 @@ pub const Forwarder = struct {
     },
     // TODO(remy): this could be a specific type owning all the transactions memory
     //             and having all of them stored in an arena managed by the type instead.
-    transactions: std.ArrayList(*Transaction),
+    transactions: std.ArrayListUnmanaged(*Transaction),
 
     pub fn init(gpa: std.mem.Allocator, config: Config) !Forwarder {
         return .{
@@ -98,7 +98,7 @@ pub const Forwarder = struct {
                 .sketches_url = try std.fmt.allocPrintZ(gpa, "{s}?api_key={s}", .{ sketches_endpoint, config.apikey }),
             },
             // TODO(remy): maybe an arena dedicated to transactions?
-            .transactions = std.ArrayList(*Transaction).init(gpa),
+            .transactions = .empty,
         };
     }
 
@@ -109,7 +109,7 @@ pub const Forwarder = struct {
         for (self.transactions.items) |tx| {
             tx.deinit();
         }
-        self.transactions.deinit();
+        self.transactions.deinit(self.gpa);
     }
 
     /// flush is responsible for sending all the given metrics to some HTTP route.
@@ -155,7 +155,7 @@ pub const Forwarder = struct {
                 droppedtx.deinit();
             }
 
-            self.transactions.append(tx) catch |err2| {
+            self.transactions.append(self.gpa, tx) catch |err2| {
                 std.log.warn("can't store the failing transaction {s}", .{@errorName(err2)});
                 tx.deinit();
             };
@@ -180,7 +180,7 @@ pub const Forwarder = struct {
         var pb = try protobuf.SketchesFromDistributions(self.gpa, self.config, dists);
         defer pb.deinit();
         const data = try pb.encode(self.gpa);
-        try tx.data.appendSlice(data); // FIXME(remy): avoid this copy
+        try tx.data.appendSlice(self.gpa, data); // FIXME(remy): avoid this copy
         self.gpa.free(data);
 
         // compress the transaction
@@ -200,7 +200,7 @@ pub const Forwarder = struct {
             creation_time,
         );
 
-        try tx.data.appendSlice("{\"series\":[");
+        try tx.data.appendSlice(self.gpa, "{\"series\":[");
 
         // append every serie
 
@@ -208,13 +208,13 @@ pub const Forwarder = struct {
         var iterator = series.iterator();
         while (iterator.next()) |kv| {
             if (!first) {
-                try tx.data.append(',');
+                try tx.data.append(self.gpa, ',');
             }
             first = false;
             try self.write_serie(tx, kv.value_ptr.*);
         }
 
-        try tx.data.appendSlice("]}");
+        try tx.data.appendSlice(self.gpa, "]}");
 
         // compress the transaction
         try tx.compress();
@@ -233,7 +233,7 @@ pub const Forwarder = struct {
                 std.log.warn("error while retrying a transaction: {s}", .{@errorName(err)});
                 if (tx.tries < max_retry_per_transaction) {
                     tx.tries += 1;
-                    self.transactions.append(tx) catch |err2| {
+                    self.transactions.append(self.gpa, tx) catch |err2| {
                         tx.deinit();
                         std.log.err("can't store the failing transaction {s}", .{@errorName(err2)});
                     };
@@ -302,7 +302,7 @@ pub const Forwarder = struct {
         defer self.gpa.free(json);
 
         // append it to the main buffer
-        try tx.*.data.appendSlice(json);
+        try tx.*.data.appendSlice(self.gpa, json);
     }
 
     fn send_http_request(self: *Forwarder, tx: *Transaction) !void {
