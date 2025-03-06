@@ -41,7 +41,7 @@ pub const Sampler = struct {
     config: Config,
     forwarder: Forwarder,
 
-    series: std.AutoHashMapUnmanaged(u64, Serie),
+    series: std.AutoArrayHashMapUnmanaged(u64, Serie),
     // TODO(remy): benchmark against std.AutoHashMapUnmanaged
     distributions: std.AutoArrayHashMapUnmanaged(u64, Distribution),
 

@@ -16,7 +16,7 @@ const Sampler = @import("sampler.zig").Sampler;
 const MeasureAllocator = @import("measure_allocator.zig").MeasureAllocator;
 
 /// flush_frequency represents how often we flush the sampler (in ms).
-pub const flush_frequency = 15000;
+pub const flush_frequency = 10000;
 
 // TODO(remy): comment me
 pub const ThreadContext = struct {

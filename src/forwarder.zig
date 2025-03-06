@@ -113,14 +113,14 @@ pub const Forwarder = struct {
     }
 
     /// flush is responsible for sending all the given metrics to some HTTP route.
-    pub fn flush(self: *Forwarder, series: std.AutoHashMapUnmanaged(u64, Serie), dists: std.AutoArrayHashMapUnmanaged(u64, Distribution)) !void {
+    pub fn flush(self: *Forwarder, series: std.AutoArrayHashMapUnmanaged(u64, Serie), dists: std.AutoArrayHashMapUnmanaged(u64, Distribution)) !void {
         defer std.log.debug("transactions stored in RAM: {}", .{self.transactions.items.len});
 
         // try to send a new transaction only if there is metrics to send
         // ---
 
         if (series.count() > 0) {
-            const tx = try self.create_series_transaction(series, std.time.milliTimestamp());
+            const tx = try self.create_series_transaction(series.values(), std.time.milliTimestamp());
             if (self.send_transaction(tx)) {
                 tx.deinit();
             }
@@ -191,7 +191,7 @@ pub const Forwarder = struct {
 
     /// creates a transaction with the given metric series.
     /// This endpoint works with both Gzip and Zlib compression.
-    fn create_series_transaction(self: *Forwarder, series: std.AutoHashMapUnmanaged(u64, Serie), creation_time: i64) !*Transaction {
+    fn create_series_transaction(self: *Forwarder, series: []Serie, creation_time: i64) !*Transaction {
         var tx = try Transaction.init(
             self.gpa,
             self.consts.series_url,
@@ -205,13 +205,12 @@ pub const Forwarder = struct {
         // append every serie
 
         var first: bool = true;
-        var iterator = series.iterator();
-        while (iterator.next()) |kv| {
+        for (series) |serie| {
             if (!first) {
                 try tx.data.append(self.gpa, ',');
             }
             first = false;
-            try self.write_serie(tx, kv.value_ptr.*);
+            try self.write_serie(tx, serie);
         }
 
         try tx.data.appendSlice(self.gpa, "]}");
@@ -273,18 +272,18 @@ pub const Forwarder = struct {
         };
 
         // tags
-        var tags = std.ArrayList(u8).init(self.gpa);
+        var tags = std.ArrayListUnmanaged(u8).empty;
         var i: usize = 0;
         for (serie.tags.tags.items) |tag| {
-            try tags.append('"');
-            try tags.appendSlice(tag);
-            try tags.append('"');
+            try tags.append(self.gpa, '"');
+            try tags.appendSlice(self.gpa, tag);
+            try tags.append(self.gpa, '"');
             if (i < serie.tags.tags.items.len - 1) {
-                try tags.append(',');
+                try tags.append(self.gpa, ',');
             }
             i += 1;
         }
-        defer tags.deinit();
+        defer tags.deinit(self.gpa);
 
         // build the json
         const json = try std.fmt.allocPrint(
