@@ -149,7 +149,7 @@ pub const Sampler = struct {
         self.mutex.unlock();
     }
 
-    pub fn size(self: *Sampler) usize {
+    pub fn size(self: Sampler) usize {
         return self.series.count() + self.distributions.count();
     }
 
@@ -174,8 +174,8 @@ pub const Sampler = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        self.series.deinit(self.arena.allocator());
-        self.distributions.deinit(self.arena.allocator());
+        self.series = .empty;
+        self.distributions = .empty;
         self.arena.deinit();
         self.forwarder.deinit();
     }
@@ -191,89 +191,112 @@ pub const Sampler = struct {
 };
 
 test "sampling hashing" {
-    var sampler = try Sampler.init(std.testing.allocator);
-    var tags = try Parser.parse_tags(std.testing.allocator, "#my:tag,second:tag");
-    const m = metric.Metric{
-        .name = "this.is.my.metric",
-        .value = 50.0,
-        .type = metric.MetricTypeCounter,
-        .tags = tags,
+    const config = Config{
+        .hostname = "local",
+        .apikey = "abcdef",
+        .force_curl = false,
+        .max_mem_mb = 20000,
+        .uds = false,
     };
 
-    try Sampler.sample(sampler, m);
-    assert(Sampler.size(sampler) == 1);
+    const allocator = std.testing.allocator;
 
-    try Sampler.sample(sampler, m);
-    assert(Sampler.size(sampler) == 1);
+    var sampler = try Sampler.init(allocator, config);
+    const tags = try Parser.parse_tags(allocator, "#my:tag,second:tag");
+    var m = try metric.Metric.init(allocator, "this.is.my.metric");
+    defer m.deinit();
+    m.value = 50.0;
+    m.type = .Counter;
+    m.tags = tags;
 
-    const m2 = metric.Metric{
-        .name = "this.is.my.metric",
-        .value = 25.0,
-        .type = metric.MetricTypeCounter,
-        .tags = tags,
-    };
+    try sampler.sample(m);
+    assert(sampler.size() == 1);
 
-    try Sampler.sample(sampler, m2);
-    assert(Sampler.size(sampler) == 1);
+    try sampler.sample(m);
+    assert(sampler.size() == 1);
 
-    const m3 = metric.Metric{
-        .name = "this.is.my.other.metric",
-        .value = 25.0,
-        .type = metric.MetricTypeCounter,
-        .tags = tags,
-    };
+    var m2 = try metric.Metric.init(allocator, "this.is.my.metric");
+    const tags2 = try Parser.parse_tags(allocator, "#my:tag,second:tag");
+    defer m2.deinit();
+    m2.value = 25.0;
+    m2.type = .Counter;
+    m2.tags = tags2;
 
-    try Sampler.sample(sampler, m3);
-    assert(Sampler.size(sampler) == 2);
+    try sampler.sample(m2);
+    assert(sampler.size() == 1);
 
-    var other_tags = try Parser.parse_tags(std.testing.allocator, "#my:tag,second:tag,and:other");
+    var m3 = try metric.Metric.init(allocator, "this.is.my.other.metric");
+    const tags3 = try Parser.parse_tags(allocator, "#my:tag,second:tag");
+    defer m3.deinit();
+    m3.value = 25.0;
+    m3.type = .Counter;
+    m3.tags = tags3;
+
+    try sampler.sample(m3);
+    assert(sampler.size() == 2);
+
+    var other_tags = try Parser.parse_tags(allocator, "#my:tag,second:tag,and:other");
+    other_tags.deinit(allocator);
 
     sampler.deinit();
-    tags.deinit();
-    other_tags.deinit();
 }
 
 test "sampling gauge" {
-    var sampler = try Sampler.init(std.testing.allocator);
-    var m = metric.Metric{
-        .name = "this.is.my.gauge",
-        .value = 50.0,
-        .type = metric.MetricTypeGauge,
-        .tags = undefined,
+    const allocator = std.testing.allocator;
+
+    const config = Config{
+        .hostname = "local",
+        .apikey = "abcdef",
+        .force_curl = false,
+        .max_mem_mb = 20000,
+        .uds = false,
     };
 
-    try Sampler.sample(sampler, m);
-    assert(Sampler.size(sampler) == 1);
+    var sampler = try Sampler.init(allocator, config);
 
-    var iterator = sampler.series.iterator();
-    if (iterator.next()) |kv| {
-        const serie = kv.value_ptr.*;
-        assert(serie.value == 50.0);
+    var m = try metric.Metric.init(allocator, "this.is.my.gauge");
+    defer m.deinit();
+    m.value = 50.0;
+    m.type = .Gauge;
+    m.tags = .empty;
+
+    try sampler.sample(m);
+    try std.testing.expectEqual(1, sampler.size());
+
+    for (sampler.series.values()) |serie| {
+        try std.testing.expectEqual(50.0, serie.value);
     }
 
     m.value = 20;
+    try sampler.sample(m);
+    try std.testing.expectEqual(1, sampler.size());
 
-    try Sampler.sample(sampler, m);
-    iterator = sampler.series.iterator();
-    if (iterator.next()) |kv| {
-        const serie = kv.value_ptr.*;
-        assert(serie.value == 20.0);
+    for (sampler.series.values()) |serie| {
+        try std.testing.expectEqual(20.0, serie.value);
     }
 
     sampler.deinit();
 }
 
 test "sampling counter" {
-    var sampler = try Sampler.init(std.testing.allocator);
-    var m = metric.Metric{
-        .name = "this.is.my.counter",
-        .value = 50.0,
-        .type = metric.MetricTypeCounter,
-        .tags = undefined,
+    const config = Config{
+        .hostname = "local",
+        .apikey = "abcdef",
+        .force_curl = false,
+        .max_mem_mb = 20000,
+        .uds = false,
     };
+    const allocator = std.testing.allocator;
 
-    try Sampler.sample(sampler, m);
-    assert(Sampler.size(sampler) == 1);
+    var sampler = try Sampler.init(allocator, config);
+    var m = try metric.Metric.init(allocator, "this.is.my.counter");
+    defer m.deinit();
+    m.value = 50.0;
+    m.type = .Counter;
+    m.tags = .empty;
+
+    try sampler.sample(m);
+    assert(sampler.size() == 1);
 
     var iterator = sampler.series.iterator();
     if (iterator.next()) |kv| {
@@ -284,10 +307,8 @@ test "sampling counter" {
 
     m.value = 20;
 
-    try Sampler.sample(sampler, m);
-    iterator = sampler.series.iterator();
-    if (iterator.next()) |kv| {
-        const serie = kv.value_ptr.*;
+    try sampler.sample(m);
+    for (sampler.series.values()) |serie| {
         assert(serie.value == 70.0);
         assert(serie.samples == 2);
     }

@@ -433,23 +433,27 @@ test "transaction_mem_usage" {
         .metric_type = .Gauge,
         .samples = 1,
         .value = 1,
-        .tags = null,
+        .tags = .empty,
     };
 
     const config = Config{
         .hostname = "local",
         .apikey = "abcdef",
+        .force_curl = false,
         .max_mem_mb = 20000,
         .uds = false,
     };
 
-    var series = std.AutoHashMap(u64, Serie).init(allocator);
-    try series.put(123456789, serie);
+    var series = std.AutoArrayHashMapUnmanaged(u64, Serie).empty;
+    try series.put(allocator, 123456789, serie);
 
-    var tx = try Forwarder.create_transaction(allocator, config, &series, 0);
+    var forwarder = try Forwarder.init(allocator, config);
+    defer forwarder.deinit();
+
+    var tx = try forwarder.create_series_transaction(series.values(), 0);
     tx.deinit();
 
-    series.deinit();
+    series.deinit(allocator);
     allocator.free(name);
 }
 
@@ -459,7 +463,7 @@ test "transaction_mem_usage" {
 
 test "write_serie_test" {
     const allocator = std.testing.allocator;
-    var tx = try Transaction.init(allocator, 0);
+    var tx = try Transaction.init(allocator, series_endpoint, headerContentTypeJson, .Zlib, 0);
 
     const name = try allocator.alloc(u8, "my.metric".len);
     std.mem.copyForwards(u8, name, "my.metric");
@@ -469,17 +473,21 @@ test "write_serie_test" {
         .metric_type = .Gauge,
         .samples = 1,
         .value = 1,
-        .tags = null,
+        .tags = .empty,
     };
 
     const config = Config{
         .hostname = "local",
         .apikey = "abcdef",
+        .force_curl = false,
         .max_mem_mb = 20000,
         .uds = false,
     };
 
-    try Forwarder.write_sample(allocator, config, tx, serie);
+    var forwarder = try Forwarder.init(allocator, config);
+    defer forwarder.deinit();
+
+    try forwarder.write_serie(tx, serie);
     tx.deinit();
 
     allocator.free(name);

@@ -112,9 +112,8 @@ pub const Parser = struct {
             return ParsingError.MalformedTags;
         }
         var iterator = std.mem.splitSequence(u8, buffer[1..buffer.len], ",");
-        var part: ?[]const u8 = iterator.next();
-        while (part != null) : (part = iterator.next()) {
-            try rv.appendCopy(allocator, part.?);
+        while (iterator.next()) |part| {
+            try rv.appendCopy(allocator, part);
         }
 
         std.sort.insertion([]const u8, rv.tags.items, {}, lessThanTags);
@@ -129,10 +128,10 @@ pub const Parser = struct {
 test "split_name_and_value" {
     const packet = "hello:5.0";
 
-    const m = try Parser.split_name_and_value(std.testing.allocator, packet);
+    var m = try Parser.split_name_and_value(std.testing.allocator, packet);
     assert(std.mem.eql(u8, m.name, "hello"));
     assert(m.value == 5.0);
-    m.deinit(std.testing.allocator);
+    m.deinit();
 }
 
 test "parse_metric" {
@@ -142,7 +141,8 @@ test "parse_metric" {
     defer buf.deinit();
     const packet = buf.items;
 
-    const m = try Parser.parse_metric(std.testing.allocator, packet);
+    var m = try Parser.parse_metric(std.testing.allocator, packet);
+    defer m.deinit();
     assert(std.mem.eql(u8, m.name, "hello"));
     assert(m.value == 5.0);
 
@@ -151,22 +151,19 @@ test "parse_metric" {
     // relying on the packet buffer but on its own.
     buf.items[0] = 'a';
     assert(std.mem.eql(u8, m.name, "hello"));
-
-    if (m.tags) |tags| {
-        tags.deinit();
-    }
 }
 
 test "parse_tags" {
     const tags: []const u8 = "#my:tag,dev:env,z:value,aaa:aba,aaa:aaa1";
-    var rv = try Parser.parse_tags(std.testing.allocator, tags);
+    const allocator = std.testing.allocator;
+    var rv = try Parser.parse_tags(allocator, tags);
 
-    assert(rv.items.len == 5);
-    assert(std.mem.eql(u8, rv.items[0], "aaa:aaa1"));
-    assert(std.mem.eql(u8, rv.items[1], "aaa:aba"));
-    assert(std.mem.eql(u8, rv.items[2], "dev:env"));
-    assert(std.mem.eql(u8, rv.items[3], "my:tag"));
-    assert(std.mem.eql(u8, rv.items[4], "z:value"));
+    assert(rv.tags.items.len == 5);
+    assert(std.mem.eql(u8, rv.tags.items[0], "aaa:aaa1"));
+    assert(std.mem.eql(u8, rv.tags.items[1], "aaa:aba"));
+    assert(std.mem.eql(u8, rv.tags.items[2], "dev:env"));
+    assert(std.mem.eql(u8, rv.tags.items[3], "my:tag"));
+    assert(std.mem.eql(u8, rv.tags.items[4], "z:value"));
 
-    rv.deinit();
+    rv.deinit(allocator);
 }

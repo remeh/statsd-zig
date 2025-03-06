@@ -20,6 +20,7 @@ pub const TagsSetUnmanaged = struct {
         for (self.tags.items) |tag| {
             allocator.free(tag);
         }
+        self.tags.deinit(allocator);
     }
 
     // TODO(remy): comment
@@ -57,6 +58,6 @@ pub const Metric = struct {
 
     pub fn deinit(self: *Metric) void {
         self.allocator.free(self.name);
-        self.tags.deinit();
+        self.tags.deinit(self.allocator);
     }
 };
