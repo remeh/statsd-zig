@@ -41,18 +41,18 @@ pub const Transaction = struct {
     // TODO(remy): when not using curl anymore, these ones won't have to be finished by a \0
     url: [*:0]const u8,
     data: std.ArrayListUnmanaged(u8),
-    creation_time: i64, // unit: ms
+    bucket: u64,
     tries: u8,
 
     // TODO(remy): this shouldn't return a pointer
-    pub fn init(allocator: std.mem.Allocator, url: [*:0]const u8, content_type: [*:0]const u8, compression_type: compressionType, creation_time: i64) !*Transaction {
+    pub fn init(allocator: std.mem.Allocator, url: [*:0]const u8, content_type: [*:0]const u8, compression_type: compressionType, bucket: u64) !*Transaction {
         const rv = try allocator.create(Transaction);
         rv.* = Transaction{
             .allocator = allocator,
             .content_type = content_type,
             .compression_type = compression_type,
             .data = .empty,
-            .creation_time = creation_time,
+            .bucket = bucket,
             .tries = 0,
             .url = url,
         };
@@ -113,21 +113,21 @@ pub const Forwarder = struct {
     }
 
     /// flush is responsible for sending all the given metrics to some HTTP route.
-    pub fn flush(self: *Forwarder, series: std.AutoArrayHashMapUnmanaged(u64, Serie), dists: std.AutoArrayHashMapUnmanaged(u64, Distribution)) !void {
+    pub fn flush(self: *Forwarder, current_bucket: u64, series: std.AutoArrayHashMapUnmanaged(u64, Serie), dists: std.AutoArrayHashMapUnmanaged(u64, Distribution)) !void {
         defer std.log.debug("transactions stored in RAM: {}", .{self.transactions.items.len});
 
         // try to send a new transaction only if there is metrics to send
         // ---
 
         if (series.count() > 0) {
-            const tx = try self.create_series_transaction(series.values(), std.time.milliTimestamp());
+            const tx = try self.create_series_transaction(series.values(), current_bucket);
             if (self.send_transaction(tx)) {
                 tx.deinit();
             }
         }
 
         if (dists.count() > 0) {
-            const tx = try self.create_sketches_transaction(dists.values(), std.time.milliTimestamp());
+            const tx = try self.create_sketches_transaction(dists.values(), current_bucket);
             if (self.send_transaction(tx)) {
                 tx.deinit();
             }
@@ -167,17 +167,17 @@ pub const Forwarder = struct {
 
     /// creates a transaction with the given distribution series.
     /// This endpoint does not seem to work with Gzip compression.
-    fn create_sketches_transaction(self: *Forwarder, dists: []Distribution, creation_time: i64) !*Transaction {
+    fn create_sketches_transaction(self: *Forwarder, dists: []Distribution, bucket: u64) !*Transaction {
         var tx = try Transaction.init(
             self.gpa,
             self.consts.sketches_url,
             headerContentTypeProto,
             .Zlib,
-            creation_time,
+            bucket,
         );
 
         // create the protobuf payload
-        var pb = try protobuf.SketchesFromDistributions(self.gpa, self.config, dists);
+        var pb = try protobuf.SketchesFromDistributions(self.gpa, self.config, dists, bucket);
         defer pb.deinit();
         const data = try pb.encode(self.gpa);
         try tx.data.appendSlice(self.gpa, data); // FIXME(remy): avoid this copy
@@ -191,13 +191,13 @@ pub const Forwarder = struct {
 
     /// creates a transaction with the given metric series.
     /// This endpoint works with both Gzip and Zlib compression.
-    fn create_series_transaction(self: *Forwarder, series: []Serie, creation_time: i64) !*Transaction {
+    fn create_series_transaction(self: *Forwarder, series: []Serie, bucket: u64) !*Transaction {
         var tx = try Transaction.init(
             self.gpa,
             self.consts.series_url,
             headerContentTypeJson,
             .Gzip,
-            creation_time,
+            bucket,
         );
 
         try tx.data.appendSlice(self.gpa, "{\"series\":[");
@@ -238,7 +238,7 @@ pub const Forwarder = struct {
                     };
                 } else {
                     tx.deinit();
-                    std.log.err("this transaction of {d} bytes dating from {d} has been dropped.", .{ tx.data.items.len, tx.creation_time });
+                    std.log.err("this transaction of {d} bytes dating from {d} has been dropped.", .{ tx.data.items.len, tx.bucket });
                 }
                 break; // useless to try more transaction right now
             };
@@ -271,6 +271,12 @@ pub const Forwarder = struct {
             else => unreachable,
         };
 
+        const value: f32 = switch (serie.metric_type) {
+            .Gauge => serie.value,
+            .Counter => serie.value/@as(f32, @floatFromInt(serie.samples)),
+            else => unreachable,
+        };
+
         // tags
         var tags = std.ArrayListUnmanaged(u8).empty;
         var i: usize = 0;
@@ -294,8 +300,8 @@ pub const Forwarder = struct {
                 self.config.hostname,
                 tags.items,
                 t,
-                @divTrunc(std.time.milliTimestamp(), 1000),
-                serie.value,
+                tx.bucket,
+                value,
             },
         );
         defer self.gpa.free(json);

@@ -27,8 +27,7 @@ pub const ThreadContext = struct {
     b: *PreallocatedPacketsPool,
     /// is running in UDS
     uds: bool,
-    /// sampler to send telemetry from the server itself
-    // FIXME(remy): sharing the sampler here is an abomination
+    /// sampler to send health telemetry from the server itself
     sampler: *Sampler,
 };
 
@@ -59,7 +58,9 @@ pub fn main() !void {
     const queue = AtomicQueue(Packet).init();
 
     // gpa
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{
+        .stack_trace_frames = 10,
+    }){};
     defer _ = gpa.detectLeaks();
 
     // catch close signal
@@ -76,6 +77,8 @@ pub fn main() !void {
     // create the sampler
     // -----------------
 
+    // this sampler will be used by only one thread, it doesn't need
+    // to lock on sampling.
     var sampler = try Sampler.init(gpa.allocator(), config);
     defer sampler.deinit();
 
@@ -114,10 +117,9 @@ pub fn main() !void {
                 if (Parser.parse_packet(measured_arena.allocator(), node.data)) |metrics| {
                     packets_parsed += 1;
                     // sampling
-                    var i: usize = 0;
-                    while (i < metrics.items.len) : (i += 1) {
+                    for (metrics.items) |m| {
                         metrics_parsed += 1;
-                        try sampler.sample(metrics.items[i]);
+                        try sampler.sample(m);
                     }
                 } else |err| {
                     std.log.err("can't parse packet: {s}", .{@errorName(err)});
@@ -145,51 +147,11 @@ pub fn main() !void {
             std.log.info("metrics parsed: {d}/s ({d} last {d}s)", .{ @divTrunc(metrics_parsed, (flush_frequency / 1000)), metrics_parsed, flush_frequency / 1000 });
             std.log.info("reporting {d} bytes used by the parser", .{measured_arena.allocated});
 
-            // TODO(remy): these must lived in a separate sampler, than can be
-            // used by the listener thread without fearing of slowing down the
-            // overall pipeline (because that separate sampler will need a lock)
-            // with a LockType parameter on the `sample` function, we can remove
-            // the lock usage from the happy path.
-            var m = metric.Metric{
-                .allocator = undefined,
-                .name = "statsd.parser.packets_parsed",
-                .value = @floatFromInt(packets_parsed),
-                .type = .Counter,
-                .tags = .empty,
-            };
-            sampler.sample(m) catch |err| {
-                std.log.err("can't report parser telemetry: {}", .{err});
-            };
-            m = metric.Metric{
-                .allocator = undefined,
-                .name = "statsd.parser.metrics_parsed",
-                .value = @floatFromInt(metrics_parsed),
-                .type = .Counter,
-                .tags = .empty,
-            };
-            sampler.sample(m) catch |err| {
-                std.log.err("can't report parser telemetry: {}", .{err});
-            };
-            m = metric.Metric{
-                .allocator = undefined,
-                .name = "statsd.parser.bytes_parsed",
-                .value = @floatFromInt(bytes_parsed),
-                .type = .Counter,
-                .tags = .empty,
-            };
-            sampler.sample(m) catch |err| {
-                std.log.err("can't report parser telemetry: {}", .{err});
-            };
-            m = metric.Metric{
-                .allocator = undefined,
-                .name = "statsd.parser.bytes_inuse",
-                .value = @floatFromInt(measured_arena.allocated),
-                .type = .Gauge,
-                .tags = .empty,
-            };
-            sampler.sample(m) catch |err| {
-                std.log.err("can't report parser telemetry: {}", .{err});
-            };
+            sampler.sample_telemetry(.Counter, "statsd.parser.packets_parsed", @floatFromInt(packets_parsed), .empty);
+            sampler.sample_telemetry(.Counter, "statsd.parser.metrics_parsed", @floatFromInt(metrics_parsed), .empty);
+            sampler.sample_telemetry(.Counter, "statsd.parser.bytes_parsed", @floatFromInt(bytes_parsed), .empty);
+            sampler.sample_telemetry(.Counter, "statsd.parser.pool.available_packet", @floatFromInt(packets_pool.items.size()), .empty);
+            sampler.sample_telemetry(.Gauge, "statsd.parser.bytes_inuse", @floatFromInt(measured_arena.allocated), .empty);
 
             packets_parsed = 0;
             metrics_parsed = 0;

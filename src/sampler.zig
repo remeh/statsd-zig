@@ -41,6 +41,9 @@ pub const Sampler = struct {
     config: Config,
     forwarder: Forwarder,
 
+    // TODO(remy): use a Bucket type containing the series and the distributions
+    // this bucket being attached to a 10s interval
+    current_bucket: u64 = 0, // timestamp of the current bucket, aligned to 10s
     series: std.AutoArrayHashMapUnmanaged(u64, Serie),
     // TODO(remy): benchmark against std.AutoHashMapUnmanaged
     distributions: std.AutoArrayHashMapUnmanaged(u64, Distribution),
@@ -58,9 +61,11 @@ pub const Sampler = struct {
         };
     }
 
-    // TODO(remy): with a LockType parameter on the `sample` function, we can remove
-    // the lock usage from the happy path.
     pub fn sample(self: *Sampler, m: metric.Metric) !void {
+        if (self.size() == 0) {
+            self.current_bucket = @intCast(@divTrunc(std.time.timestamp(), 10) * 10);
+        }
+
         const h = Sampler.hash(m);
 
         if (m.type == .Distribution) {
@@ -68,6 +73,20 @@ pub const Sampler = struct {
         }
 
         return self.sampleSerie(m, h);
+    }
+
+    /// sample internal telemetry about the server itself.
+    /// Won't return an error but throw debug logs instead.
+    pub fn sample_telemetry(self: *Sampler, metric_type: metric.MetricType, name: []const u8, value: f32, tags: TagsSetUnmanaged) void {
+        self.sample(metric.Metric{
+            .allocator = undefined,
+            .name = name,
+            .value = value,
+            .type = metric_type,
+            .tags = tags,
+        }) catch |err| {
+            std.log.err("can't report server telemetry '{s}': {}", .{ name, err });
+        };
     }
 
     pub fn sampleDistribution(self: *Sampler, m: metric.Metric, h: u64) !void {
@@ -149,7 +168,10 @@ pub const Sampler = struct {
         self.mutex.unlock();
     }
 
-    pub fn size(self: Sampler) usize {
+    pub fn size(self: *Sampler) usize {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
         return self.series.count() + self.distributions.count();
     }
 
@@ -161,7 +183,7 @@ pub const Sampler = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        try self.forwarder.flush(self.series, self.distributions);
+        try self.forwarder.flush(self.current_bucket, self.series, self.distributions);
 
         self.series = .empty;
         self.distributions = .empty;

@@ -42,6 +42,7 @@ pub const Metric = struct {
     value: f32,
     type: MetricType,
     tags: TagsSetUnmanaged,
+    // TODO(remy): timestamp
 
     /// init creates a metric, copying the name using the given allocator.
     pub fn init(allocator: std.mem.Allocator, name: []const u8) !Metric {

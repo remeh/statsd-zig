@@ -8,7 +8,7 @@ pub fn AtomicQueue(comptime T: type) type {
     return struct {
         l: DoublyLinkedList(T),
         mutex: std.Thread.Mutex,
-        size: u32,
+        len: u32,
 
         const Self = @This();
         pub const Node: type = DoublyLinkedList(T).Node;
@@ -18,8 +18,16 @@ pub fn AtomicQueue(comptime T: type) type {
             return .{
                 .l = DoublyLinkedList(T){},
                 .mutex = std.Thread.Mutex{},
-                .size = 0,
+                .len = 0,
             };
+        }
+
+        /// thread-safe returning how many values are in the queue.
+        pub fn size(self: *Self) u32 {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+
+            return self.len;
         }
 
         /// isEmpty returns if the queue is empty.
@@ -27,7 +35,7 @@ pub fn AtomicQueue(comptime T: type) type {
             self.mutex.lock();
             defer self.mutex.unlock();
 
-            return self.size == 0;
+            return self.len == 0;
         }
 
         /// put puts a new entry in the queue.
@@ -35,7 +43,7 @@ pub fn AtomicQueue(comptime T: type) type {
             self.mutex.lock();
             defer self.mutex.unlock();
 
-            self.size += 1;
+            self.len += 1;
             self.l.append(v);
         }
 
@@ -44,11 +52,11 @@ pub fn AtomicQueue(comptime T: type) type {
             self.mutex.lock();
             defer self.mutex.unlock();
 
-            if (self.size == 0) {
+            if (self.len == 0) {
                 return null;
             }
 
-            self.size -= 1;
+            self.len -= 1;
             return self.l.popFirst();
         }
     };

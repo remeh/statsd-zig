@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 
 const Metric = @import("metric.zig").Metric;
 const MetricType = @import("metric.zig").MetricType;
+const Sampler = @import("sampler.zig").Sampler;
 const ThreadContext = @import("main.zig").ThreadContext;
 
 pub const Packet = struct {
@@ -53,7 +54,7 @@ pub fn listener(context: *ThreadContext) !void {
     var array: [8192]u8 = undefined;
     var buf: []u8 = &array;
 
-    var drops: i64 = 0;
+    var drops: u64 = 0;
     var last_drop_message = std.time.milliTimestamp();
 
     // initialization
@@ -109,7 +110,6 @@ pub fn listener(context: *ThreadContext) !void {
                 // std.log.info("epoll events count: {d}", .{events_count});
             },
             .netbsd, .openbsd, .macos => {
-                // TODO(remy): kqueue implementation
                 const empty_kevs = &[0]std.posix.Kevent{};
                 const kevent_array = @as(*const [1]std.posix.Kevent, &kev);
                 _ = try std.posix.kevent(kq, kevent_array, empty_kevs, null);
@@ -143,21 +143,16 @@ pub fn listener(context: *ThreadContext) !void {
         // send it for processing
         context.q.put(node);
 
-        const tmp = std.time.milliTimestamp() - last_drop_message;
+        const tmp: u64 = @intCast(std.time.milliTimestamp() - last_drop_message);
         if (tmp > 10000) {
             last_drop_message = std.time.milliTimestamp();
             std.log.info("listener drops: {d}/s ({d} last {d}s)", .{ @divTrunc(drops, @divTrunc(tmp, 1000)), drops, 10 });
-            // TODO(remy): some function in sampler here
-            const m = Metric{
-                .allocator = undefined,
-                .name = "statsd.listener.packets_drop",
-                .value = @floatFromInt(drops),
-                .type = .Counter,
-                .tags = .empty,
-            };
-            context.sampler.sample(m) catch |err| {
-                std.log.err("can't report parser telemetry: {}", .{err});
-            };
+
+            // FIXME(remy): just because of this call, the main Sampler isn't thread safe
+            // and has to lock its maps. Either the sampler_telemetry should have a thread
+            // safe path (with sampleDist and sampleSerie with a lock parameter) or it should
+            // not be emitted from the listener thread.
+            context.sampler.sample_telemetry(.Counter, "statsd.listener.packets_drop", @floatFromInt(drops), .empty);
 
             drops = 0;
         }
