@@ -91,16 +91,14 @@ pub const Sampler = struct {
 
     pub fn sampleDistribution(self: *Sampler, m: metric.Metric, h: u64) !void {
         self.mutex.lock();
+        defer self.mutex.unlock();
         const k = self.distributions.get(h);
-        self.mutex.unlock();
 
         if (k) |d| {
             // existing
             var newDistribution = d;
             try newDistribution.sketch.insert(@floatCast(m.value));
-            self.mutex.lock();
             try self.distributions.put(self.arena.allocator(), h, newDistribution);
-            self.mutex.unlock();
             return;
         }
 
@@ -117,20 +115,19 @@ pub const Sampler = struct {
 
         const sketch = DDSketch.initDefault(self.arena.allocator());
 
-        self.mutex.lock();
         try self.distributions.put(self.arena.allocator(), h, Distribution{
             .metric_name = name,
             .tags = tags,
             .sketch = sketch,
         });
-        self.mutex.unlock();
         return;
     }
 
     pub fn sampleSerie(self: *Sampler, m: metric.Metric, h: u64) !void {
         self.mutex.lock();
+        defer self.mutex.unlock();
         const k = self.series.get(h);
-        self.mutex.unlock();
+
         if (k) |s| {
             var newSerie = s;
             newSerie.samples += 1;
@@ -140,9 +137,7 @@ pub const Sampler = struct {
                 else => newSerie.value += m.value, // Counter
             }
 
-            self.mutex.lock();
             try self.series.put(self.arena.allocator(), h, newSerie);
-            self.mutex.unlock();
             return;
         }
 
@@ -157,7 +152,6 @@ pub const Sampler = struct {
             try tags.appendCopy(self.arena.allocator(), tag);
         }
 
-        self.mutex.lock();
         try self.series.put(self.arena.allocator(), h, Serie{
             .metric_name = name,
             .metric_type = m.type,
@@ -165,7 +159,6 @@ pub const Sampler = struct {
             .tags = tags,
             .value = m.value,
         });
-        self.mutex.unlock();
     }
 
     pub fn size(self: *Sampler) usize {
