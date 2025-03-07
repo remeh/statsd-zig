@@ -294,7 +294,7 @@ pub const Forwarder = struct {
         // build the json
         const json = try std.fmt.allocPrint(
             self.gpa,
-            "{{\"metric\":\"{s}\",\"host\":\"{s}\",\"tags\":[{s}],\"type\":\"{s}\",\"points\":[[{d},{d}]],\"interval\":0,\"source_type_name\":\"System\"}}",
+            "{{\"metric\":\"{s}\",\"host\":\"{s}\",\"tags\":[{s}],\"type\":\"{s}\",\"points\":[[{d},{d}]],\"interval\":10,\"source_type_name\":\"System\"}}",
             .{
                 serie.metric_name,
                 self.config.hostname,
