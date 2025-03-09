@@ -235,13 +235,6 @@ pub const Sampler = struct {
         });
     }
 
-    pub fn size(self: *Sampler) usize {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        return self.series.count() + self.distributions.count();
-    }
-
     pub fn flush(self: *Sampler) !void {
         self.mutex.lock();
         defer self.mutex.unlock();
@@ -276,6 +269,8 @@ pub const Sampler = struct {
     }
 };
 
+// TODO(remy): test buckets implementation
+
 test "sampling hashing" {
     const config = Config{
         .hostname = "local",
@@ -296,10 +291,10 @@ test "sampling hashing" {
     m.tags = tags;
 
     try sampler.sample(m);
-    assert(sampler.size() == 1);
+    assert((try sampler.current_bucket()).size() == 1);
 
     try sampler.sample(m);
-    assert(sampler.size() == 1);
+    assert((try sampler.current_bucket()).size() == 1);
 
     var m2 = try metric.Metric.init(allocator, "this.is.my.metric");
     const tags2 = try Parser.parse_tags(allocator, "#my:tag,second:tag");
@@ -309,7 +304,7 @@ test "sampling hashing" {
     m2.tags = tags2;
 
     try sampler.sample(m2);
-    assert(sampler.size() == 1);
+    assert((try sampler.current_bucket()).size() == 1);
 
     var m3 = try metric.Metric.init(allocator, "this.is.my.other.metric");
     const tags3 = try Parser.parse_tags(allocator, "#my:tag,second:tag");
@@ -319,7 +314,7 @@ test "sampling hashing" {
     m3.tags = tags3;
 
     try sampler.sample(m3);
-    assert(sampler.size() == 2);
+    assert((try sampler.current_bucket()).size() == 2);
 
     var other_tags = try Parser.parse_tags(allocator, "#my:tag,second:tag,and:other");
     other_tags.deinit(allocator);
@@ -347,17 +342,19 @@ test "sampling gauge" {
     m.tags = .empty;
 
     try sampler.sample(m);
-    try std.testing.expectEqual(1, sampler.size());
+    try std.testing.expectEqual(1, (try sampler.current_bucket()).size());
 
-    for (sampler.series.values()) |serie| {
+    var current_bucket = try sampler.current_bucket();
+    for (current_bucket.series.values()) |serie| {
         try std.testing.expectEqual(50.0, serie.value);
     }
 
     m.value = 20;
     try sampler.sample(m);
-    try std.testing.expectEqual(1, sampler.size());
+    try std.testing.expectEqual(1, (try sampler.current_bucket()).size());
 
-    for (sampler.series.values()) |serie| {
+    current_bucket = try sampler.current_bucket();
+    for (current_bucket.series.values()) |serie| {
         try std.testing.expectEqual(20.0, serie.value);
     }
 
@@ -382,9 +379,10 @@ test "sampling counter" {
     m.tags = .empty;
 
     try sampler.sample(m);
-    assert(sampler.size() == 1);
+    try std.testing.expectEqual(1, (try sampler.current_bucket()).size());
 
-    var iterator = sampler.series.iterator();
+    var current_bucket = try sampler.current_bucket();
+    var iterator = current_bucket.series.iterator();
     if (iterator.next()) |kv| {
         const serie = kv.value_ptr.*;
         assert(serie.value == 50.0);
@@ -394,7 +392,8 @@ test "sampling counter" {
     m.value = 20;
 
     try sampler.sample(m);
-    for (sampler.series.values()) |serie| {
+    current_bucket = try sampler.current_bucket(); 
+    for (current_bucket.series.values()) |serie| {
         assert(serie.value == 70.0);
         assert(serie.samples == 2);
     }
