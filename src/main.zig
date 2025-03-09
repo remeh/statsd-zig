@@ -11,12 +11,19 @@ const AtomicQueue = @import("atomic_queue.zig").AtomicQueue;
 const metric = @import("metric.zig");
 const Config = @import("config.zig").Config;
 const Parser = @import("parser.zig").Parser;
+const MeasureAllocator = @import("measure_allocator.zig").MeasureAllocator;
 const PreallocatedPacketsPool = @import("preallocated_packets_pool.zig").PreallocatedPacketsPool;
 const Sampler = @import("sampler.zig").Sampler;
-const MeasureAllocator = @import("measure_allocator.zig").MeasureAllocator;
+const Signal = @import("signal.zig").Signal;
 
 /// flush_frequency represents how often we flush the sampler (in ms).
 pub const flush_frequency = 10000;
+
+pub const NotificationChannel = struct {
+    poll_fd: i32 = 0,
+    notification_fd: i32 = 0,
+};
+
 
 // TODO(remy): comment me
 pub const ThreadContext = struct {
@@ -27,6 +34,9 @@ pub const ThreadContext = struct {
     b: *PreallocatedPacketsPool,
     /// is running in UDS
     uds: bool,
+    /// used by the listener thread that something has been put for processing
+    /// in the queue.
+    packets_signal: Signal,
     /// sampler to send health telemetry from the server itself
     sampler: *Sampler,
 };
@@ -89,6 +99,7 @@ pub fn main() !void {
         .q = queue,
         .b = &packets_pool,
         .uds = config.uds,
+        .packets_signal = try Signal.init(),
         .sampler = &sampler,
     };
 
@@ -111,6 +122,8 @@ pub fn main() !void {
 
     // pipeline mainloop
     while (true) {
+        tx.packets_signal.wait();
+
         while (!tx.q.isEmpty()) {
             if (tx.q.get()) |node| {
                 // parse the packets
@@ -138,6 +151,7 @@ pub fn main() !void {
             }
         }
 
+        // TODO(remy): use timerfd on linux
         if (std.time.milliTimestamp() > next_flush) {
             sampler.flush() catch |err| {
                 std.log.err("can't flush: {s}", .{@errorName(err)});

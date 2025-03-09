@@ -77,7 +77,7 @@ pub fn listener(context: *ThreadContext) !void {
                 .data = std.os.linux.epoll_data{ .fd = sockfd },
             };
             try std.posix.epoll_ctl(
-                @as(i32, @intCast(epfd)),
+                @intCast(epfd),
                 std.os.linux.EPOLL.CTL_ADD,
                 sockfd,
                 &epev,
@@ -95,7 +95,6 @@ pub fn listener(context: *ThreadContext) !void {
                 .fflags = std.c.NOTE.CRITICAL,
                 .data = 0,
                 .udata = undefined,
-                // .udata = @ptrToInt(&eventfd_node.data.base),
             };
         },
         else => {},
@@ -106,8 +105,7 @@ pub fn listener(context: *ThreadContext) !void {
         switch (builtin.os.tag) {
             .linux => {
                 var events: [10]std.os.linux.epoll_event = undefined;
-                _ = std.os.linux.epoll_wait(@as(i32, @intCast(epfd)), events[0..], 10, -1);
-                // std.log.info("epoll events count: {d}", .{events_count});
+                _ = std.os.linux.epoll_wait(@intCast(epfd), events[0..], 10, -1);
             },
             .netbsd, .openbsd, .macos => {
                 const empty_kevs = &[0]std.posix.Kevent{};
@@ -118,12 +116,10 @@ pub fn listener(context: *ThreadContext) !void {
         }
 
         const rlen = std.posix.recvfrom(sockfd, buf, 0, null, null) catch {
-            std.posix.nanosleep(0, 1000000);
             continue;
         };
 
         if (rlen == 0) {
-            std.posix.nanosleep(0, 1000000);
             continue;
         }
 
@@ -143,6 +139,11 @@ pub fn listener(context: *ThreadContext) !void {
         // send it for processing
         context.q.put(node);
 
+        // notify the processing thread
+        context.packets_signal.emit() catch |err| {
+            std.log.err("listener: can't emit signal: {}", .{err});
+        };
+
         const tmp: u64 = @intCast(std.time.milliTimestamp() - last_drop_message);
         if (tmp > 10000) {
             last_drop_message = std.time.milliTimestamp();
@@ -156,7 +157,5 @@ pub fn listener(context: *ThreadContext) !void {
 
             drops = 0;
         }
-
-        //        std.posix.nanosleep(0, 100000);
     }
 }
