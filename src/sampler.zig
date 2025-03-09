@@ -78,7 +78,7 @@ const Bucket = struct {
         return @intCast(@divTrunc(timestamp, 10) * 10);
     }
 
-    // TODO(remy): comment me
+    /// size returns how many different series + distributions are sampled in this bucket.
     pub fn size(self: *Bucket) usize {
         self.mutex.lock();
         defer self.mutex.unlock();
@@ -93,7 +93,6 @@ pub const Sampler = struct {
     config: Config,
     forwarder: Forwarder,
 
-    // XXX
     buckets: std.AutoHashMapUnmanaged(u64, *Bucket),
     mutex: std.Thread.Mutex,
 
@@ -253,7 +252,7 @@ pub const Sampler = struct {
             if (self.buckets.fetchRemove(key)) |kv| {
                 const bucket = kv.value;
                 std.log.debug("flushing bucket {d}", .{bucket.interval_start});
-                try self.forwarder.flush(bucket.interval_start, bucket.series, bucket.distributions);
+                try self.forwarder.new_transaction(bucket.interval_start, bucket.series, bucket.distributions);
                 bucket.deinit(self.gpa);
             }
         }

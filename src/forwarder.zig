@@ -3,9 +3,12 @@ const builtin = @import("builtin");
 
 const c = @cImport(@cInclude("curl/curl.h"));
 
+const AtomicQueue = @import("atomic_queue.zig").AtomicQueue;
 const Distribution = @import("sampler.zig").Distribution;
-const Serie = @import("sampler.zig").Serie;
 const Config = @import("config.zig").Config;
+const Serie = @import("sampler.zig").Serie;
+const Signal = @import("signal.zig").Signal;
+
 const metric = @import("metric.zig");
 const protobuf = @import("protobuf.zig");
 
@@ -30,52 +33,12 @@ const max_stored_transactions = 10;
 
 pub const ForwarderError = error{RequestFailed};
 
-/// Transaction is the content of the HTTP request sent to Datadog.
-/// If sending a transaction to the intake fails, we'll keep it in RAM for some
-/// time to do some retries.
-pub const Transaction = struct {
-    allocator: std.mem.Allocator,
-    compression_type: compressionType = .Zlib,
-    // TODO(remy): when not using curl anymore, these ones won't have to be finished by a \0
-    content_type: [*:0]const u8,
-    // TODO(remy): when not using curl anymore, these ones won't have to be finished by a \0
-    url: [*:0]const u8,
-    data: std.ArrayListUnmanaged(u8),
-    bucket: u64,
-    tries: u8,
-
-    // TODO(remy): this shouldn't return a pointer
-    pub fn init(allocator: std.mem.Allocator, url: [*:0]const u8, content_type: [*:0]const u8, compression_type: compressionType, bucket: u64) !*Transaction {
-        const rv = try allocator.create(Transaction);
-        rv.* = Transaction{
-            .allocator = allocator,
-            .content_type = content_type,
-            .compression_type = compression_type,
-            .data = .empty,
-            .bucket = bucket,
-            .tries = 0,
-            .url = url,
-        };
-        return rv;
-    }
-
-    pub fn deinit(self: *Transaction) void {
-        self.data.deinit(self.allocator);
-        self.allocator.destroy(self);
-    }
-
-    pub fn compress(self: *Transaction) !void {
-        var compressed = std.ArrayListUnmanaged(u8).empty;
-        var reader = std.io.fixedBufferStream(self.data.items);
-        switch (self.compression_type) {
-            .Gzip => try std.compress.gzip.compress(reader.reader(), compressed.writer(self.allocator), .{}),
-            .Zlib => try std.compress.zlib.compress(reader.reader(), compressed.writer(self.allocator), .{}),
-        }
-        self.data.deinit(self.allocator);
-        self.data = compressed;
-    }
-};
-
+/// The Forwarder is the entrypoint to send data to a remote intake.
+///
+/// It's job is to receive Buckets to process, to serialize their content into
+/// a transaction, and it is pushing this transaction to a separate thread responsible
+/// of sending these transactions to the remote intake.
+/// It owns and runs a separate thread, which functions are part of ForwarderThread.
 pub const Forwarder = struct {
     gpa: std.mem.Allocator,
     config: Config,
@@ -84,12 +47,11 @@ pub const Forwarder = struct {
         series_url: [:0]const u8,
         sketches_url: [:0]const u8,
     },
-    // TODO(remy): this could be a specific type owning all the transactions memory
-    //             and having all of them stored in an arena managed by the type instead.
-    transactions: std.ArrayListUnmanaged(*Transaction),
+    pthread: std.Thread,
+    thread: *ForwarderThread,
 
     pub fn init(gpa: std.mem.Allocator, config: Config) !Forwarder {
-        return .{
+        var forwarder = Forwarder{
             .gpa = gpa,
             .config = config,
             .consts = .{
@@ -97,77 +59,82 @@ pub const Forwarder = struct {
                 .series_url = try std.fmt.allocPrintZ(gpa, "{s}?api_key={s}", .{ series_endpoint, config.apikey }),
                 .sketches_url = try std.fmt.allocPrintZ(gpa, "{s}?api_key={s}", .{ sketches_endpoint, config.apikey }),
             },
-            // TODO(remy): maybe an arena dedicated to transactions?
-            .transactions = .empty,
+            .pthread = undefined,
+            .thread = undefined,
         };
+
+        // configure and spawn the sending thread
+        const thread_context = try gpa.create(ForwarderThread);
+        thread_context.* = .{
+            .backlog = .empty,
+            .q = AtomicQueue(*Transaction).init(),
+            .config = config,
+            .signal = try Signal.init(),
+            .gpa = gpa,
+            .consts = .{
+                .apikey_header = forwarder.consts.apikey_header,
+            },
+        };
+
+        forwarder.pthread = try std.Thread.spawn(std.Thread.SpawnConfig{}, ForwarderThread.run, .{thread_context});
+        forwarder.thread = thread_context;
+
+        return forwarder;
     }
 
     pub fn deinit(self: *Forwarder) void {
         self.gpa.free(self.consts.apikey_header);
         self.gpa.free(self.consts.series_url);
         self.gpa.free(self.consts.sketches_url);
-        for (self.transactions.items) |tx| {
+
+        while (self.thread.q.get()) |node| {
+            const tx = node.data;
             tx.deinit();
+            self.gpa.destroy(node);
         }
-        self.transactions.deinit(self.gpa);
+
+        self.gpa.destroy(self.thread);
+        // self.pthread.join();
     }
 
-    /// flush is responsible for sending all the given metrics to some HTTP route.
-    pub fn flush(self: *Forwarder, current_bucket: u64, series: std.AutoArrayHashMapUnmanaged(u64, Serie), dists: std.AutoArrayHashMapUnmanaged(u64, Distribution)) !void {
-        defer std.log.debug("transactions stored in RAM: {}", .{self.transactions.items.len});
-
+    /// new_transaction is responsible for sending all the given metrics to some HTTP route.
+    pub fn new_transaction(self: *Forwarder, current_bucket: u64, series: std.AutoArrayHashMapUnmanaged(u64, Serie), dists: std.AutoArrayHashMapUnmanaged(u64, Distribution)) !void {
         // try to send a new transaction only if there is metrics to send
         // ---
 
+        var something_to_send = false;
+
         if (series.count() > 0) {
             const tx = try self.create_series_transaction(series.values(), current_bucket);
-            if (self.send_transaction(tx)) {
-                tx.deinit();
-            }
+            var node = try self.gpa.create(AtomicQueue(*Transaction).Node);
+            node.data = tx;
+            self.thread.q.put(node);
+            something_to_send = true;
         }
 
         if (dists.count() > 0) {
             const tx = try self.create_sketches_transaction(dists.values(), current_bucket);
-            if (self.send_transaction(tx)) {
-                tx.deinit();
-            }
+            var node = try self.gpa.create(AtomicQueue(*Transaction).Node);
+            node.data = tx;
+            self.thread.q.put(node);
+            something_to_send = true;
         }
 
-        // try to replay some older transactions.
-        // ---
-
-        if (self.transactions.items.len > 0) {
-            // don't replay more than 3 transactions
-            self.replay_old_transactions(3);
+        if (something_to_send) {
+            try self.thread.signal.emit();
         }
-    }
-
-    // TODO(remy): comment me
-    fn send_transaction(self: *Forwarder, tx: *Transaction) bool {
-        // try to send the transaction
-        self.send_http_request(tx) catch |err| {
-            std.log.warn("can't send a transaction: {s}\nstoring the transaction of size {d} bytes [{s}]", .{ @errorName(err), tx.data.items.len, tx.data.items });
-
-            // limit the amount of transactions stored
-            if (self.transactions.items.len > max_stored_transactions) {
-                std.log.warn("too many transactions stored, removing a random old one.", .{});
-                var droppedtx = self.transactions.orderedRemove(0);
-                droppedtx.deinit();
-            }
-
-            self.transactions.append(self.gpa, tx) catch |err2| {
-                std.log.warn("can't store the failing transaction {s}", .{@errorName(err2)});
-                tx.deinit();
-            };
-            return false;
-        };
-
-        return true;
     }
 
     /// creates a transaction with the given distribution series.
     /// This endpoint does not seem to work with Gzip compression.
     fn create_sketches_transaction(self: *Forwarder, dists: []Distribution, bucket: u64) !*Transaction {
+        const now = std.time.milliTimestamp();
+        defer {
+            const elapsed = std.time.milliTimestamp() - now;
+            std.log.debug("time to serialze sketches transaction: {d}ms", .{elapsed});
+            // TODO(remy): how to send any telemetry here?
+        }
+
         var tx = try Transaction.init(
             self.gpa,
             self.consts.sketches_url,
@@ -192,6 +159,13 @@ pub const Forwarder = struct {
     /// creates a transaction with the given metric series.
     /// This endpoint works with both Gzip and Zlib compression.
     fn create_series_transaction(self: *Forwarder, series: []Serie, bucket: u64) !*Transaction {
+        const now = std.time.milliTimestamp();
+        defer {
+            const elapsed = std.time.milliTimestamp() - now;
+            std.log.debug("time to serialze series transaction: {d}ms", .{elapsed});
+            // TODO(remy): how to send any telemetry here?
+        }
+
         var tx = try Transaction.init(
             self.gpa,
             self.consts.series_url,
@@ -273,7 +247,7 @@ pub const Forwarder = struct {
 
         const value: f32 = switch (serie.metric_type) {
             .Gauge => serie.value,
-            .Counter => serie.value/@as(f32, @floatFromInt(serie.samples)),
+            .Counter => serie.value / @as(f32, @floatFromInt(serie.samples)),
             else => unreachable,
         };
 
@@ -309,8 +283,62 @@ pub const Forwarder = struct {
         // append it to the main buffer
         try tx.*.data.appendSlice(self.gpa, json);
     }
+};
 
-    fn send_http_request(self: *Forwarder, tx: *Transaction) !void {
+// TODO(remy): comment me
+const ForwarderThread = struct {
+    q: AtomicQueue(*Transaction),
+    signal: Signal,
+    config: Config,
+    gpa: std.mem.Allocator,
+    backlog: std.ArrayListUnmanaged(*Transaction),
+    consts: struct {
+        // data owned by the main Forwarder instance.
+        apikey_header: [:0]const u8,
+    },
+
+    fn run(context: *ForwarderThread) void {
+        std.log.debug("starting forwarder thread", .{});
+        while (true) {
+            context.signal.wait(1000) catch |err| {
+                std.log.debug("can't wait for a signal, will sleep instead: {}", .{err});
+                std.time.sleep(1000000000);
+            };
+
+            // TODO(remy): implement sending transactions from the backlog
+
+            // is there something to process?
+            while (!context.q.isEmpty()) {
+                if (context.q.get()) |node| {
+                    const tx = node.data;
+
+                    context.send_http_request(tx) catch |err| {
+                        std.log.warn("can't send a transaction: {s}\nstoring the transaction of size {d} bytes [{s}]", .{ @errorName(err), tx.data.items.len, tx.data.items });
+
+                        // limit the amount of transactions stored
+                        if (context.backlog.items.len > max_stored_transactions) {
+                            std.log.warn("too many transactions stored, removing a random old one.", .{});
+                            var droppedtx = context.backlog.orderedRemove(0);
+                            droppedtx.deinit();
+                        }
+
+                        context.backlog.append(context.gpa, tx) catch |err2| {
+                            std.log.warn("can't store the failing transaction {s}", .{@errorName(err2)});
+                            tx.deinit();
+                        };
+
+                        continue; // FIXME(remy): is this applying the continue to the while as intended?
+                    };
+
+                    std.log.debug("sent transaction size {d} bytes", .{tx.data.items.len});
+                    tx.deinit();
+                    context.gpa.destroy(node);
+                }
+            }
+        }
+    }
+
+    fn send_http_request(self: *ForwarderThread, tx: *Transaction) !void {
         if (self.config.force_curl) {
             return self.send_http_request_curl(tx);
         }
@@ -319,9 +347,10 @@ pub const Forwarder = struct {
             .linux => return self.send_http_request_native(tx),
             else => return self.send_http_request_curl(tx),
         }
+        return self.send_http_request_native(tx);
     }
 
-    fn send_http_request_curl(self: *Forwarder, tx: *Transaction) !void {
+    fn send_http_request_curl(self: *ForwarderThread, tx: *Transaction) !void {
         var failed: bool = false;
         var curl: ?*c.CURL = null;
         var res: c.CURLcode = undefined;
@@ -374,7 +403,7 @@ pub const Forwarder = struct {
         }
     }
 
-    fn send_http_request_native(self: *Forwarder, tx: *Transaction) !void {
+    fn send_http_request_native(self: *ForwarderThread, tx: *Transaction) !void {
         // http client
         var http_client = std.http.Client{ .allocator = self.gpa };
         defer http_client.deinit();
@@ -426,6 +455,52 @@ pub const Forwarder = struct {
                 std.log.err("send_http_request_native: http response error: {any}", .{r.status});
             },
         }
+    }
+};
+
+/// Transaction is the content of the HTTP request sent to the intake.
+/// If sending a transaction to the intake fails, we'll keep it in RAM for some
+/// time to do some retries.
+pub const Transaction = struct {
+    allocator: std.mem.Allocator,
+    compression_type: compressionType = .Zlib,
+    // TODO(remy): when not using curl anymore, these ones won't have to be finished by a \0
+    content_type: [*:0]const u8,
+    // TODO(remy): when not using curl anymore, these ones won't have to be finished by a \0
+    url: [*:0]const u8,
+    data: std.ArrayListUnmanaged(u8),
+    bucket: u64,
+    tries: u8,
+
+    // TODO(remy): this shouldn't return a pointer
+    pub fn init(allocator: std.mem.Allocator, url: [*:0]const u8, content_type: [*:0]const u8, compression_type: compressionType, bucket: u64) !*Transaction {
+        const rv = try allocator.create(Transaction);
+        rv.* = Transaction{
+            .allocator = allocator,
+            .content_type = content_type,
+            .compression_type = compression_type,
+            .data = .empty,
+            .bucket = bucket,
+            .tries = 0,
+            .url = url,
+        };
+        return rv;
+    }
+
+    pub fn deinit(self: *Transaction) void {
+        self.data.deinit(self.allocator);
+        self.allocator.destroy(self);
+    }
+
+    pub fn compress(self: *Transaction) !void {
+        var compressed = std.ArrayListUnmanaged(u8).empty;
+        var reader = std.io.fixedBufferStream(self.data.items);
+        switch (self.compression_type) {
+            .Gzip => try std.compress.gzip.compress(reader.reader(), compressed.writer(self.allocator), .{}),
+            .Zlib => try std.compress.zlib.compress(reader.reader(), compressed.writer(self.allocator), .{}),
+        }
+        self.data.deinit(self.allocator);
+        self.data = compressed;
     }
 };
 

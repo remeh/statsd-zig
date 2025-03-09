@@ -79,7 +79,7 @@ pub fn main() !void {
 
     // pre-alloc 256 packets that will be re-used to contain the read data
     // these packets will do round-trips between the listener and the parser.
-    var packets_pool = try PreallocatedPacketsPool.init(gpa.allocator(), 256);
+    var packets_pool = try PreallocatedPacketsPool.init(gpa.allocator(), 4096);
     // TODO(remy): on close this is not enough: we might try to destroy all
     // created packets but the only we have access to in this deinit function
     // are the one which are _available_ in the pool, we're missing the ones
