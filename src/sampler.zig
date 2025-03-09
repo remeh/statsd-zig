@@ -12,6 +12,10 @@ const Forwarder = @import("forwarder.zig").Forwarder;
 const TagsSetUnmanaged = @import("metric.zig").TagsSetUnmanaged;
 const Transaction = @import("forwarder.zig").Transaction;
 
+// TODO(remy): comment me
+const sampling_interval: u64 = 10;
+
+// TODO(remy): comment me
 pub const Serie = struct {
     metric_name: []const u8,
     metric_type: metric.MetricType,
@@ -24,6 +28,7 @@ pub const Serie = struct {
     }
 };
 
+// TODO(remy): comment me
 pub const Distribution = struct {
     metric_name: []const u8,
     tags: TagsSetUnmanaged,
@@ -35,49 +40,118 @@ pub const Distribution = struct {
     }
 };
 
+/// A bucket is a set of sampled series and distributions for a given 10s interval.
+/// A sampler will use several buckets in order to be able to do a double-buffering
+/// mechanism, but also to keep track of events received with a timestamp in the past.
+/// All the memory of the objects owned by this bucket is part of the arena.
+const Bucket = struct {
+    arena: std.heap.ArenaAllocator,
+    interval_start: u64 = 0, // start timestamp of the interval, aligned to 10s
+    interval: u64 = 10,
+    // TODO(remy): benchmark against std.AutoHashMapUnmanaged
+    distributions: std.AutoArrayHashMapUnmanaged(u64, Distribution),
+    series: std.AutoArrayHashMapUnmanaged(u64, Serie),
+    mutex: std.Thread.Mutex,
+
+    pub fn init(gpa: std.mem.Allocator, interval_start: u64, interval: u64) !*Bucket {
+        const bucket = try gpa.create(Bucket);
+        bucket.* = .{
+            .arena = std.heap.ArenaAllocator.init(gpa),
+            .interval_start = interval_start,
+            .interval = interval,
+            .distributions = .empty,
+            .series = .empty,
+            .mutex = std.Thread.Mutex{},
+        };
+        return bucket;
+    }
+
+    pub fn deinit(self: *Bucket, gpa: std.mem.Allocator) void {
+        self.distributions = .empty;
+        self.series = .empty;
+        _ = self.arena.reset(.free_all);
+        gpa.destroy(self);
+    }
+
+    // TODO(remy): comment me
+    pub fn key(timestamp: i64) u64 {
+        return @intCast(@divTrunc(timestamp, 10) * 10);
+    }
+
+    // TODO(remy): comment me
+    pub fn size(self: *Bucket) usize {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        return self.series.count() + self.distributions.count();
+    }
+};
+
 // TODO(remy): comment me
 pub const Sampler = struct {
-    arena: std.heap.ArenaAllocator,
+    /// used to create/destroy the bucket entries
+    gpa: std.mem.Allocator,
     config: Config,
     forwarder: Forwarder,
 
-    // TODO(remy): use a Bucket type containing the series and the distributions
-    // this bucket being attached to a 10s interval
-    current_bucket: u64 = 0, // timestamp of the current bucket, aligned to 10s
-    series: std.AutoArrayHashMapUnmanaged(u64, Serie),
-    // TODO(remy): benchmark against std.AutoHashMapUnmanaged
-    distributions: std.AutoArrayHashMapUnmanaged(u64, Distribution),
-
+    // XXX
+    buckets: std.AutoHashMapUnmanaged(u64, *Bucket),
     mutex: std.Thread.Mutex,
 
     pub fn init(gpa: std.mem.Allocator, config: Config) !Sampler {
         return Sampler{
-            .arena = std.heap.ArenaAllocator.init(gpa),
+            .buckets = .empty,
+            .gpa = gpa,
+            .mutex = std.Thread.Mutex{},
             .config = config,
             .forwarder = try Forwarder.init(gpa, config),
-            .series = .empty,
-            .distributions = .empty,
-            .mutex = std.Thread.Mutex{},
         };
     }
 
-    pub fn sample(self: *Sampler, m: metric.Metric) !void {
-        if (self.size() == 0) {
-            self.current_bucket = @intCast(@divTrunc(std.time.timestamp(), 10) * 10);
+    /// destroy frees all the memory used by the Sampler and the instance itself.
+    /// The Sampler instance should not be used anymore after a call to destroy.
+    pub fn deinit(self: *Sampler) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        var it = self.buckets.valueIterator();
+        while (it.next()) |bucket| {
+            bucket.*.deinit(self.gpa);
         }
+        self.buckets.deinit(self.gpa);
+
+        self.forwarder.deinit();
+    }
+
+    /// Not thread-safe.
+    pub fn current_bucket(self: *Sampler) !*Bucket {
+        const bucket_key = Bucket.key(std.time.timestamp());
+        if (self.buckets.get(bucket_key)) |bucket| {
+            return bucket;
+        }
+
+        const bucket = try Bucket.init(self.gpa, bucket_key, sampling_interval);
+        try self.buckets.put(self.gpa, bucket_key, bucket);
+        std.log.debug("creating bucket for {d}", .{bucket_key});
+        return bucket;
+    }
+
+    pub fn sample(self: *Sampler, m: metric.Metric) !void {
+        self.mutex.lock();
+        const bucket = try self.current_bucket();
+        self.mutex.unlock();
 
         const h = Sampler.hash(m);
 
         if (m.type == .Distribution) {
-            return self.sampleDistribution(m, h);
+            return try self.sampleDistribution(bucket, m, h);
         }
 
-        return self.sampleSerie(m, h);
+        return try self.sampleSerie(bucket, m, h);
     }
 
     /// sample internal telemetry about the server itself.
     /// Won't return an error but throw debug logs instead.
-    pub fn sample_telemetry(self: *Sampler, metric_type: metric.MetricType, name: []const u8, value: f32, tags: TagsSetUnmanaged) void {
+    pub fn sampleTelemetry(self: *Sampler, metric_type: metric.MetricType, name: []const u8, value: f32, tags: TagsSetUnmanaged) void {
         self.sample(metric.Metric{
             .allocator = undefined,
             .name = name,
@@ -89,33 +163,33 @@ pub const Sampler = struct {
         };
     }
 
-    pub fn sampleDistribution(self: *Sampler, m: metric.Metric, h: u64) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-        const k = self.distributions.get(h);
+    pub fn sampleDistribution(_: *Sampler, bucket: *Bucket, m: metric.Metric, h: u64) !void {
+        bucket.mutex.lock();
+        defer bucket.mutex.unlock();
+        const k = bucket.distributions.get(h);
 
         if (k) |d| {
             // existing
             var newDistribution = d;
             try newDistribution.sketch.insert(@floatCast(m.value));
-            try self.distributions.put(self.arena.allocator(), h, newDistribution);
+            try bucket.distributions.put(bucket.arena.allocator(), h, newDistribution);
             return;
         }
 
         // not existing
 
-        const name = try self.arena.allocator().alloc(u8, m.name.len);
+        const name = try bucket.arena.allocator().alloc(u8, m.name.len);
         std.mem.copyForwards(u8, name, m.name);
 
         // TODO(remy): could we steal these tags from the metric instead?
         var tags = TagsSetUnmanaged.empty;
         for (m.tags.tags.items) |tag| {
-            try tags.appendCopy(self.arena.allocator(), tag);
+            try tags.appendCopy(bucket.arena.allocator(), tag);
         }
 
-        const sketch = DDSketch.initDefault(self.arena.allocator());
+        const sketch = DDSketch.initDefault(bucket.arena.allocator());
 
-        try self.distributions.put(self.arena.allocator(), h, Distribution{
+        try bucket.distributions.put(bucket.arena.allocator(), h, Distribution{
             .metric_name = name,
             .tags = tags,
             .sketch = sketch,
@@ -123,10 +197,10 @@ pub const Sampler = struct {
         return;
     }
 
-    pub fn sampleSerie(self: *Sampler, m: metric.Metric, h: u64) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-        const k = self.series.get(h);
+    pub fn sampleSerie(_: *Sampler, bucket: *Bucket, m: metric.Metric, h: u64) !void {
+        bucket.mutex.lock();
+        defer bucket.mutex.unlock();
+        const k = bucket.series.get(h);
 
         if (k) |s| {
             var newSerie = s;
@@ -137,22 +211,22 @@ pub const Sampler = struct {
                 else => newSerie.value += m.value, // Counter
             }
 
-            try self.series.put(self.arena.allocator(), h, newSerie);
+            try bucket.series.put(bucket.arena.allocator(), h, newSerie);
             return;
         }
 
-        // not existing, put it in the sampler
+        // not existing
 
-        const name = try self.arena.allocator().alloc(u8, m.name.len);
+        const name = try bucket.arena.allocator().alloc(u8, m.name.len);
         std.mem.copyForwards(u8, name, m.name);
 
         // TODO(remy): instead of copying, could we steal these tags from the metric?
         var tags = TagsSetUnmanaged.empty;
         for (m.tags.tags.items) |tag| {
-            try tags.appendCopy(self.arena.allocator(), tag);
+            try tags.appendCopy(bucket.arena.allocator(), tag);
         }
 
-        try self.series.put(self.arena.allocator(), h, Serie{
+        try bucket.series.put(bucket.arena.allocator(), h, Serie{
             .metric_name = name,
             .metric_type = m.type,
             .samples = 1,
@@ -168,31 +242,28 @@ pub const Sampler = struct {
         return self.series.count() + self.distributions.count();
     }
 
-    // TODO(remy): let's not reset the arena on every flush
-    // note that if we don't reset the arena on every flush,
-    // we'll then have to reset the series & distributions
-    // maps in some way (retaining capacity?).
     pub fn flush(self: *Sampler) !void {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        try self.forwarder.flush(self.current_bucket, self.series, self.distributions);
+        var buckets_to_flush: std.ArrayListUnmanaged(u64) = .empty;
+        defer buckets_to_flush.deinit(self.gpa);
 
-        self.series = .empty;
-        self.distributions = .empty;
-        _ = self.arena.reset(.free_all); // TODO(remy): look into retaining capacity
-    }
+        var it = self.buckets.keyIterator();
+        while (it.next()) |key| {
+            if (key.* + sampling_interval <= Bucket.key(std.time.timestamp())) {
+                try buckets_to_flush.append(self.gpa, key.*);
+            }
+        }
 
-    /// destroy frees all the memory used by the Sampler and the instance itself.
-    /// The Sampler instance should not be used anymore after a call to destroy.
-    pub fn deinit(self: *Sampler) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        self.series = .empty;
-        self.distributions = .empty;
-        self.arena.deinit();
-        self.forwarder.deinit();
+        for (buckets_to_flush.items) |key| {
+            if (self.buckets.fetchRemove(key)) |kv| {
+                const bucket = kv.value;
+                std.log.debug("flushing bucket {d}", .{bucket.interval_start});
+                try self.forwarder.flush(bucket.interval_start, bucket.series, bucket.distributions);
+                bucket.deinit(self.gpa);
+            }
+        }
     }
 
     fn hash(m: metric.Metric) u64 {

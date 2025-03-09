@@ -375,12 +375,10 @@ pub const DDSketch = struct {
         var n: f64 = 0.0;
         const wanted_rank: f64 = rank(self.count, q);
 
-        var i: usize = 0;
-        for (self.bins.items) |bin| {
+        for (0..self.bins.items.len, self.bins.items) |i, bin| {
             n += @floatFromInt(bin.n);
 
             if (n <= wanted_rank) {
-                i += 1;
                 continue;
             }
 
@@ -397,7 +395,8 @@ pub const DDSketch = struct {
             return (v_low * weight + v_high * (1.0 - weight));
         }
 
-        return std.math.nan(f64);
+        unreachable;
+        // return std.math.nan(f64);
     }
 };
 

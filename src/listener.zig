@@ -89,10 +89,10 @@ pub fn listener(context: *ThreadContext) !void {
             kq = try std.posix.kqueue();
             errdefer std.posix.close(kq);
             kev = std.posix.Kevent{
-                .ident = 1,
-                .filter = std.c.EVFILT.TIMER,
+                .ident = @intCast(sockfd),
+                .filter = std.c.EVFILT.READ,
                 .flags = std.c.EV.CLEAR | std.c.EV.ADD | std.c.EV.DISABLE | std.c.EV.ONESHOT,
-                .fflags = 0,
+                .fflags = std.c.NOTE.CRITICAL,
                 .data = 0,
                 .udata = undefined,
                 // .udata = @ptrToInt(&eventfd_node.data.base),
@@ -152,7 +152,7 @@ pub fn listener(context: *ThreadContext) !void {
             // and has to lock its maps. Either the sampler_telemetry should have a thread
             // safe path (with sampleDist and sampleSerie with a lock parameter) or it should
             // not be emitted from the listener thread.
-            context.sampler.sample_telemetry(.Counter, "statsd.listener.packets_drop", @floatFromInt(drops), .empty);
+            context.sampler.sampleTelemetry(.Counter, "statsd.listener.packets_drop", @floatFromInt(drops), .empty);
 
             drops = 0;
         }

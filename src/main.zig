@@ -147,11 +147,11 @@ pub fn main() !void {
             std.log.info("metrics parsed: {d}/s ({d} last {d}s)", .{ @divTrunc(metrics_parsed, (flush_frequency / 1000)), metrics_parsed, flush_frequency / 1000 });
             std.log.info("reporting {d} bytes used by the parser", .{measured_arena.allocated});
 
-            sampler.sample_telemetry(.Counter, "statsd.parser.packets_parsed", @floatFromInt(packets_parsed), .empty);
-            sampler.sample_telemetry(.Counter, "statsd.parser.metrics_parsed", @floatFromInt(metrics_parsed), .empty);
-            sampler.sample_telemetry(.Counter, "statsd.parser.bytes_parsed", @floatFromInt(bytes_parsed), .empty);
-            sampler.sample_telemetry(.Counter, "statsd.parser.pool.available_packet", @floatFromInt(packets_pool.items.size()), .empty);
-            sampler.sample_telemetry(.Gauge, "statsd.parser.bytes_inuse", @floatFromInt(measured_arena.allocated), .empty);
+            sampler.sampleTelemetry(.Counter, "statsd.parser.packets_parsed", @floatFromInt(packets_parsed), .empty);
+            sampler.sampleTelemetry(.Counter, "statsd.parser.metrics_parsed", @floatFromInt(metrics_parsed), .empty);
+            sampler.sampleTelemetry(.Counter, "statsd.parser.bytes_parsed", @floatFromInt(bytes_parsed), .empty);
+            sampler.sampleTelemetry(.Counter, "statsd.parser.pool.available_packet", @floatFromInt(packets_pool.items.size()), .empty);
+            sampler.sampleTelemetry(.Gauge, "statsd.parser.bytes_inuse", @floatFromInt(measured_arena.allocated), .empty);
 
             packets_parsed = 0;
             metrics_parsed = 0;
