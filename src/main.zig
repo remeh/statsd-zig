@@ -17,15 +17,16 @@ const Sampler = @import("sampler.zig").Sampler;
 const Signal = @import("signal.zig").Signal;
 
 /// flush_frequency represents how often we flush the sampler (in ms).
-pub const flush_frequency = 10000;
+pub const flush_frequency_ms = 10000;
 
 pub const NotificationChannel = struct {
     poll_fd: i32 = 0,
     notification_fd: i32 = 0,
 };
 
-
-// TODO(remy): comment me
+/// ThreadContext is an object shared between the listener and the main thread,
+/// to be able to communicate Packets to process, preallocated packets to use,
+/// a Signal as notification mechanism that something can be processed, etc.
 pub const ThreadContext = struct {
     /// packets read from the network waiting to be processed
     q: AtomicQueue(Packet),
@@ -79,6 +80,10 @@ pub fn main() !void {
     // pre-alloc 256 packets that will be re-used to contain the read data
     // these packets will do round-trips between the listener and the parser.
     var packets_pool = try PreallocatedPacketsPool.init(gpa.allocator(), 256);
+    // TODO(remy): on close this is not enough: we might try to destroy all
+    // created packets but the only we have access to in this deinit function
+    // are the one which are _available_ in the pool, we're missing the ones
+    // still in-flight.
     defer packets_pool.deinit();
 
     // read config
@@ -108,22 +113,24 @@ pub fn main() !void {
     thread.detach();
 
     // prepare the allocator used by the parser
-    // TODO(remy): move all of this in the parser object
+    // TODO(remy): move all this initialisation in the parser implementation
     // ----------------------------------------
 
     var arena = std.heap.ArenaAllocator.init(gpa.allocator());
     defer arena.deinit();
     var measured_arena = MeasureAllocator.init(arena.allocator());
 
-    var next_flush = std.time.milliTimestamp() + flush_frequency;
+    var next_flush = std.time.milliTimestamp() + flush_frequency_ms;
     var packets_parsed: u32 = 0;
     var metrics_parsed: u32 = 0;
     var bytes_parsed: u64 = 0;
 
     // pipeline mainloop
     while (true) {
+        // use epoll/kqueue to wait for something to process, or until 3000ms have elapsed.
         tx.packets_signal.wait(3000);
 
+        // is there something to process?
         while (!tx.q.isEmpty()) {
             if (tx.q.get()) |node| {
                 // parse the packets
@@ -144,21 +151,20 @@ pub fn main() !void {
                 // send this buffer back to the usable queue of buffers
                 tx.b.put(node);
 
-                // TODO(remy): this should be a function of the paresr implementation
+                // TODO(remy): this should be moved in the parser implementation
                 if (measured_arena.allocated > config.max_mem_mb * 1024 * 1024) {
                     break;
                 }
             }
         }
 
-        // TODO(remy): use timerfd on linux
         if (std.time.milliTimestamp() > next_flush) {
             sampler.flush() catch |err| {
                 std.log.err("can't flush: {s}", .{@errorName(err)});
             };
 
-            std.log.info("packets parsed: {d}/s ({d} last {d}s)", .{ @divTrunc(packets_parsed, (flush_frequency / 1000)), packets_parsed, flush_frequency / 1000 });
-            std.log.info("metrics parsed: {d}/s ({d} last {d}s)", .{ @divTrunc(metrics_parsed, (flush_frequency / 1000)), metrics_parsed, flush_frequency / 1000 });
+            std.log.info("packets parsed: {d}/s ({d} last {d}s)", .{ @divTrunc(packets_parsed, (flush_frequency_ms / 1000)), packets_parsed, flush_frequency_ms / 1000 });
+            std.log.info("metrics parsed: {d}/s ({d} last {d}s)", .{ @divTrunc(metrics_parsed, (flush_frequency_ms / 1000)), metrics_parsed, flush_frequency_ms / 1000 });
             std.log.info("reporting {d} bytes used by the parser", .{measured_arena.allocated});
 
             sampler.sampleTelemetry(.Counter, "statsd.parser.packets_parsed", @floatFromInt(packets_parsed), .empty);
@@ -171,7 +177,7 @@ pub fn main() !void {
             metrics_parsed = 0;
             bytes_parsed = 0;
 
-            next_flush = std.time.milliTimestamp() + flush_frequency;
+            next_flush = next_flush + flush_frequency_ms;
         }
 
         if (!running.load(.monotonic)) {
