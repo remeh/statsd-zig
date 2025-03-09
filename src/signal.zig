@@ -46,13 +46,13 @@ pub const Signal = struct {
         }
     }
 
-    // TODO(remy): implement a timeout parameter
-    pub fn wait(self: Signal) void {
+    // TODO(remy): comment me
+    // ms_timeout is how many millisecond max the wait call will wait.
+    pub fn wait(self: Signal, ms_timeout: u32) void {
         switch (builtin.os.tag) {
             .linux => {
                 var events: [10]std.os.linux.epoll_event = undefined;
-                // TODO(remy): timeout instead of -1
-                _ = std.os.linux.epoll_wait(@intCast(self.poll_fd), events[0..], 10, -1);
+                _ = std.os.linux.epoll_wait(@intCast(self.poll_fd), events[0..], 10, @intCast(ms_timeout));
             },
             else => {
                 // TODO(remy): kqueue impl

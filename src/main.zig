@@ -122,7 +122,7 @@ pub fn main() !void {
 
     // pipeline mainloop
     while (true) {
-        tx.packets_signal.wait();
+        tx.packets_signal.wait(3000);
 
         while (!tx.q.isEmpty()) {
             if (tx.q.get()) |node| {
@@ -173,8 +173,6 @@ pub fn main() !void {
 
             next_flush = std.time.milliTimestamp() + flush_frequency;
         }
-
-        //        std.posix.nanosleep(0, 100000);
 
         if (!running.load(.monotonic)) {
             break;
