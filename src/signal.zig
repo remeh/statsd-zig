@@ -27,9 +27,15 @@ pub const Signal = struct {
                     .poll_fd = @intCast(epfd),
                 };                
             },
-            // TODO(remy): kqueue impl
-            else => .{
-                .notification_d = 0,
+            .netbsd, .openbsd, .macos => {
+                const kq = try std.posix.kqueue();
+                return .{
+                    .poll_fd = kq,
+                    .notification_fd = 0,
+                };
+            },
+            else => return .{
+                .notification_fd = 0,
                 .poll_fd = 0,
             }
         }
@@ -38,25 +44,32 @@ pub const Signal = struct {
     pub fn deinit(self: *Signal) void {
         switch (builtin.os.tag) {
             .linux => {
-                std.posix.linux.close(self.notification_fd);
-                std.posix.linux.close(self.poll_fd);
+                std.posix.close(self.notification_fd);
+                std.posix.close(self.poll_fd);
             },
-            // TODO(remy): kqueue impl
+            .netbsd, .openbsd, .macos => {
+                std.posix.close(self.poll_fd);
+            },
             else => return,
         }
     }
 
     // TODO(remy): comment me
     // ms_timeout is how many millisecond max the wait call will wait.
-    pub fn wait(self: Signal, ms_timeout: u32) void {
+    pub fn wait(self: Signal, ms_timeout: u32) !void {
         switch (builtin.os.tag) {
             .linux => {
                 var events: [10]std.os.linux.epoll_event = undefined;
                 _ = std.os.linux.epoll_wait(@intCast(self.poll_fd), events[0..], 10, @intCast(ms_timeout));
             },
+            .netbsd, .openbsd, .macos => {
+                var events: [10]std.posix.Kevent = undefined;
+                const sec = ms_timeout/1000;
+                const nsec = (ms_timeout % 1000) * 1000000;
+                _ = try std.posix.kevent(self.poll_fd, &.{}, &events, &.{.sec = sec, .nsec = nsec});
+            },
             else => {
-                // TODO(remy): kqueue impl
-                std.time.nanosleep(0, 10000);
+                std.time.sleep(100000);
             }
         }
     }
@@ -67,7 +80,17 @@ pub const Signal = struct {
                 const v: usize = 1;
                 _ = try std.posix.write(self.notification_fd, std.mem.asBytes(&v));
             },
-            else => {}, // TODO(remy): kqueue
+            .netbsd, .openbsd, .macos => {
+                _ = try std.posix.kevent(self.poll_fd, &.{std.posix.Kevent{
+                    .ident = @intCast(self.poll_fd),
+                    .filter = std.posix.system.EVFILT.USER,
+                    .flags = std.posix.system.EV.ADD | std.posix.system.EV.CLEAR,
+                    .fflags = std.posix.system.NOTE.TRIGGER,
+                    .data = 0,
+                    .udata = 0,
+                }}, &.{}, null);
+            },
+            else => {},
         }
     }
 };
