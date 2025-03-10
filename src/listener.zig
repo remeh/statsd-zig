@@ -14,7 +14,7 @@ pub const Packet = struct {
 fn open_socket_udp() !i32 {
     const sockfd: i32 = try std.posix.socket(
         std.posix.AF.INET,
-        std.posix.SOCK.DGRAM | std.posix.SOCK.CLOEXEC | std.posix.SOCK.NONBLOCK,
+        std.posix.SOCK.DGRAM | std.posix.SOCK.CLOEXEC,
         0,
     );
     var addr: std.net.Address = try std.net.Address.parseIp4("127.0.0.1", 8125);
@@ -25,7 +25,7 @@ fn open_socket_udp() !i32 {
 fn open_socket_uds() !i32 {
     const sockfd: i32 = try std.posix.socket(
         std.posix.AF.UNIX,
-        std.posix.SOCK.DGRAM | std.posix.SOCK.CLOEXEC | std.posix.SOCK.NONBLOCK,
+        std.posix.SOCK.DGRAM | std.posix.SOCK.CLOEXEC,
         0,
     );
     var addr: std.net.Address = try std.net.Address.initUnix("statsd.sock");
@@ -62,10 +62,6 @@ pub fn listener(context: *ThreadContext) !void {
     var epfd: usize = undefined;
     // kqueue
     var kq: i32 = undefined;
-    var kev: switch (builtin.os.tag) {
-        .macos => std.posix.Kevent,
-        else => usize,
-    } = undefined;
 
     switch (builtin.os.tag) {
         .linux => {
@@ -88,14 +84,6 @@ pub fn listener(context: *ThreadContext) !void {
             std.log.info("using kqueue", .{});
             kq = try std.posix.kqueue();
             errdefer std.posix.close(kq);
-            kev = std.posix.Kevent{
-                .ident = @intCast(sockfd),
-                .filter = std.c.EVFILT.READ,
-                .flags = std.c.EV.CLEAR | std.c.EV.ADD | std.c.EV.DISABLE | std.c.EV.ONESHOT,
-                .fflags = std.c.NOTE.CRITICAL,
-                .data = 0,
-                .udata = undefined,
-            };
         },
         else => {},
     }
@@ -108,9 +96,17 @@ pub fn listener(context: *ThreadContext) !void {
                 _ = std.os.linux.epoll_wait(@intCast(epfd), events[0..], 10, -1);
             },
             .netbsd, .openbsd, .macos => {
-                const empty_kevs = &[0]std.posix.Kevent{};
-                const kevent_array = @as(*const [1]std.posix.Kevent, &kev);
-                _ = try std.posix.kevent(kq, kevent_array, empty_kevs, null);
+                var events: [1]std.posix.Kevent = .{.{
+                    .ident = @intCast(sockfd),
+                    .filter = std.posix.system.EVFILT.READ,
+                    .flags = std.posix.system.EV.ADD,
+                    .fflags = std.posix.system.NOTE.CRITICAL,
+                    .data = 0,
+                    .udata = 0,
+                }};
+                var kev: std.posix.Kevent = undefined;
+                const changelist = @as(*const [1]std.posix.Kevent, &kev);
+                _ = try std.posix.kevent(kq, changelist, &events, null);
             },
             else => {},
         }

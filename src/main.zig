@@ -128,7 +128,9 @@ pub fn main() !void {
     // pipeline mainloop
     while (true) {
         // use epoll/kqueue to wait for something to process, or until 3000ms have elapsed.
-        tx.packets_signal.wait(3000);
+        tx.packets_signal.wait(3000) catch |err| {
+            std.log.debug("main: on signal wait: {}", .{err});
+        };
 
         // is there something to process?
         while (!tx.q.isEmpty()) {
@@ -194,5 +196,7 @@ pub fn main() !void {
         }
     }
 
-    try std.fs.cwd().deleteFile("statsd.sock");
+    if (config.uds) {
+        try std.fs.cwd().deleteFile("statsd.sock");
+    }
 }
