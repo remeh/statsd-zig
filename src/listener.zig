@@ -96,19 +96,17 @@ pub fn listener(context: *ThreadContext) !void {
                 _ = std.os.linux.epoll_wait(@intCast(epfd), events[0..], 10, -1);
             },
             .netbsd, .openbsd, .macos => {
-                var events: [1]std.posix.Kevent = .{.{
+                const event: std.posix.Kevent = .{
                     .ident = @intCast(sockfd),
                     .filter = std.posix.system.EVFILT.READ,
-                    .flags = std.posix.system.EV.ADD,
+                    .flags = std.posix.system.EV.ADD | std.posix.system.EV.ENABLE,
                     .fflags = std.posix.system.NOTE.CRITICAL,
                     .data = 0,
                     .udata = 0,
-                }};
-                var kev: std.posix.Kevent = undefined;
-                const changelist = @as(*const [1]std.posix.Kevent, &kev);
-                // FIXME(remy): because of O_NONBLOCK, this is always immediately returning
-                //              instead of blocking.
-                _ = try std.posix.kevent(kq, changelist, &events, null);
+                };
+                var out: [1]std.posix.Kevent = undefined;
+                _ = try std.posix.kevent(kq, &.{event}, &out, null);
+
             },
             else => {},
         }
