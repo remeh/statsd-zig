@@ -47,6 +47,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    tests.root_module.addImport("protobuf", protobuf_dep.module("protobuf"));
 
     tests.linkLibC();
 

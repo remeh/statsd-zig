@@ -3,10 +3,12 @@ const pb = @import("protobuf/agent_payload.pb.zig");
 const protobuf = @import("protobuf");
 
 const Config = @import("config.zig").Config;
+const DDSketch = @import("ddsketch.zig").DDSketch;
 const Distribution = @import("sampler.zig").Distribution;
+const TagsSetUnmanaged = @import("metric.zig").TagsSetUnmanaged;
 
-// TODO(remy): comment me
-// TODO(remy): unit test
+/// SketchesFromDistributions converts the `dists` to a `SketchPayload`
+/// ready to be encoded.
 pub fn SketchesFromDistributions(allocator: std.mem.Allocator, config: Config, dists: []Distribution, bucket: u64) !pb.SketchPayload {
     var rv = pb.SketchPayload.init(allocator);
     for (dists) |dist| {
@@ -15,8 +17,6 @@ pub fn SketchesFromDistributions(allocator: std.mem.Allocator, config: Config, d
     return rv;
 }
 
-// TODO(remy): comment me
-// TODO(remy): unit test
 fn SketchFromDistribution(allocator: std.mem.Allocator, config: Config, dist: Distribution, bucket: u64) !pb.SketchPayload.Sketch {
     var rv = pb.SketchPayload.Sketch.init(allocator);
 
@@ -37,7 +37,7 @@ fn SketchFromDistribution(allocator: std.mem.Allocator, config: Config, dist: Di
     var ns = std.ArrayList(u32).init(allocator);
 
     for (dist.sketch.bins.items) |bin| {
-        // TODO(remy): because we do this with it in the end,
+        // TODO(remy): because at the end of the day we do this,
         // we could use a better data structure for bins in a DDSketch...
         try ks.append(@intCast(bin.k));
         try ns.append(@intCast(bin.n));
@@ -52,4 +52,49 @@ fn SketchFromDistribution(allocator: std.mem.Allocator, config: Config, dist: Di
     };
 
     return rv;
+}
+
+test "SketchesFromDistributions" {
+    const config = Config{
+        .hostname = "local",
+        .apikey = "abcdef",
+        .force_curl = false,
+        .max_mem_mb = 20000,
+        .uds = false,
+    };
+    const allocator = std.testing.allocator;
+
+    var tags1: TagsSetUnmanaged = .empty;
+    try tags1.appendCopy(allocator, "first");
+    try tags1.appendCopy(allocator, "second");
+    var tags2: TagsSetUnmanaged = .empty;
+    try tags2.appendCopy(allocator, "third");
+    try tags2.appendCopy(allocator, "fourth");
+
+    var dists: [2]Distribution = .{
+        Distribution{
+            .metric_name = "my.dist",
+            .tags = tags1,
+            .sketch = DDSketch.initDefault(allocator),
+        },
+        Distribution{
+            .metric_name = "my.other.dist",
+            .tags = tags2,
+            .sketch = DDSketch.initDefault(allocator),
+        },
+    };
+    defer dists[0].deinit(allocator);
+    defer dists[1].deinit(allocator);
+
+    const payload = try SketchesFromDistributions(allocator, config, dists[0..], 0);
+
+    try std.testing.expectEqual(2, payload.sketches.items.len);
+    try std.testing.expectEqualStrings("my.dist", payload.sketches.items[0].metric.Const);
+    try std.testing.expectEqualStrings("first", payload.sketches.items[0].tags.items[0].Const);
+    try std.testing.expectEqualStrings("second", payload.sketches.items[0].tags.items[1].Const);
+    try std.testing.expectEqualStrings("my.other.dist", payload.sketches.items[1].metric.Const);
+    try std.testing.expectEqualStrings("third", payload.sketches.items[1].tags.items[0].Const);
+    try std.testing.expectEqualStrings("fourth", payload.sketches.items[1].tags.items[1].Const);
+
+    payload.deinit();
 }
