@@ -12,10 +12,10 @@ const Signal = @import("signal.zig").Signal;
 const metric = @import("metric.zig");
 const protobuf = @import("protobuf.zig");
 
-const series_endpoint = "https://agent.datadoghq.com/api/v1/series";
-const sketches_endpoint = "https://agent.datadoghq.com/api/beta/sketches";
-//const series_endpoint = "http://localhost:8080";
-//const sketches_endpoint = "http://localhost:8080";
+//const series_endpoint = "https://agent.datadoghq.com/api/v1/series";
+//const sketches_endpoint = "https://agent.datadoghq.com/api/beta/sketches";
+const series_endpoint = "http://localhost:8080";
+const sketches_endpoint = "http://localhost:8080";
 
 const headerContentTypeJson: [*:0]const u8 = "Content-Type: application/json";
 const headerContentTypeProto: [*:0]const u8 = "Content-Type: application/x-protobuf";
@@ -35,7 +35,7 @@ pub const ForwarderError = error{RequestFailed};
 
 /// The Forwarder is the entrypoint to send data to a remote intake.
 ///
-/// It's job is to receive Buckets to process, to serialize their content into
+/// Its job is to receive Buckets to process, to serialize their content into
 /// a transaction, and it is pushing this transaction to a separate thread responsible
 /// of sending these transactions to the remote intake.
 /// It owns and runs a separate thread, which functions are part of ForwarderThread.
@@ -71,11 +71,11 @@ pub const Forwarder = struct {
             .config = config,
             .signal = try Signal.init(),
             .gpa = gpa,
+            .running = std.atomic.Value(bool).init(true),
             .consts = .{
                 .apikey_header = forwarder.consts.apikey_header,
             },
         };
-
         forwarder.pthread = try std.Thread.spawn(std.Thread.SpawnConfig{}, ForwarderThread.run, .{thread_context});
         forwarder.thread = thread_context;
 
@@ -93,15 +93,14 @@ pub const Forwarder = struct {
             self.gpa.destroy(node);
         }
 
+        self.thread.running.store(false, .release);
+        self.pthread.join();
         self.gpa.destroy(self.thread);
-        // self.pthread.join();
     }
 
-    /// new_transaction is responsible for sending all the given metrics to some HTTP route.
+    /// new_transaction creates a transaction for the given metrics
+    /// and pushes it to the sending thread.
     pub fn new_transaction(self: *Forwarder, current_bucket: u64, series: std.AutoArrayHashMapUnmanaged(u64, Serie), dists: std.AutoArrayHashMapUnmanaged(u64, Distribution)) !void {
-        // try to send a new transaction only if there is metrics to send
-        // ---
-
         var something_to_send = false;
 
         if (series.count() > 0) {
@@ -268,35 +267,41 @@ const ForwarderThread = struct {
     config: Config,
     gpa: std.mem.Allocator,
     backlog: std.ArrayListUnmanaged(*Transaction),
+    running: std.atomic.Value(bool),
     consts: struct {
         // data owned by the main Forwarder instance.
         apikey_header: [:0]const u8,
     },
 
-    fn run(context: *ForwarderThread) void {
+    fn run(self: *ForwarderThread) void {
         std.log.debug("starting forwarder thread", .{});
-        while (true) {
-            context.signal.wait(1000) catch |err| {
+        var running = true;
+        while (running) {
+            self.signal.wait(1000) catch |err| {
                 std.log.debug("can't wait for a signal, will sleep instead: {}", .{err});
                 std.time.sleep(1000000000);
             };
 
-            // is there something to process?
-            while (!context.q.isEmpty()) {
-                if (context.q.get()) |node| {
+            if (!self.running.load(.acquire)) {
+                running = false;
+            }
+
+            // is there something to process
+            while (!self.q.isEmpty()) {
+                if (self.q.get()) |node| {
                     const tx = node.data;
 
-                    context.send_http_request(tx) catch |err| {
+                    self.send_http_request(tx) catch |err| {
                         std.log.warn("can't send a transaction: {s}\nstoring the transaction of size {d} bytes [{s}]", .{ @errorName(err), tx.data.items.len, tx.data.items });
 
                         // limit the amount of transactions stored
-                        if (context.backlog.items.len > max_stored_transactions) {
+                        if (self.backlog.items.len > max_stored_transactions) {
                             std.log.warn("too many transactions stored, removing a random old one.", .{});
-                            var droppedtx = context.backlog.orderedRemove(0);
+                            var droppedtx = self.backlog.orderedRemove(0);
                             droppedtx.deinit();
                         }
 
-                        context.backlog.append(context.gpa, tx) catch |err2| {
+                        self.backlog.append(self.gpa, tx) catch |err2| {
                             std.log.warn("can't store the failing transaction {s}", .{@errorName(err2)});
                             tx.deinit();
                         };
@@ -306,11 +311,11 @@ const ForwarderThread = struct {
 
                     std.log.debug("sent transaction size {d} bytes", .{tx.data.items.len});
                     tx.deinit();
-                    context.gpa.destroy(node);
+                    self.gpa.destroy(node);
                 }
             }
 
-            context.replay_backlog_transactions(3);
+            self.replay_backlog_transactions(3);
         }
     }
 
