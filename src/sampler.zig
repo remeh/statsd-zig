@@ -183,7 +183,7 @@ pub const Sampler = struct {
         // TODO(remy): could we steal these tags from the metric instead?
         var tags = TagsSetUnmanaged.empty;
         for (m.tags.tags.items) |tag| {
-            try tags.appendCopy(bucket.arena.allocator(), tag);
+            try tags.append(bucket.arena.allocator(), tag);
         }
 
         const sketch = DDSketch.initDefault(bucket.arena.allocator());
@@ -222,7 +222,7 @@ pub const Sampler = struct {
         // TODO(remy): instead of copying, could we steal these tags from the metric?
         var tags = TagsSetUnmanaged.empty;
         for (m.tags.tags.items) |tag| {
-            try tags.appendCopy(bucket.arena.allocator(), tag);
+            try tags.append(bucket.arena.allocator(), tag);
         }
 
         try bucket.series.put(bucket.arena.allocator(), h, Serie{

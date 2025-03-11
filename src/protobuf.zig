@@ -65,11 +65,11 @@ test "SketchesFromDistributions" {
     const allocator = std.testing.allocator;
 
     var tags1: TagsSetUnmanaged = .empty;
-    try tags1.appendCopy(allocator, "first");
-    try tags1.appendCopy(allocator, "second");
+    try tags1.append(allocator, "first");
+    try tags1.append(allocator, "second");
     var tags2: TagsSetUnmanaged = .empty;
-    try tags2.appendCopy(allocator, "third");
-    try tags2.appendCopy(allocator, "fourth");
+    try tags2.append(allocator, "third");
+    try tags2.append(allocator, "fourth");
 
     var dists: [2]Distribution = .{
         Distribution{

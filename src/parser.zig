@@ -113,7 +113,7 @@ pub const Parser = struct {
         }
         var iterator = std.mem.splitSequence(u8, buffer[1..buffer.len], ",");
         while (iterator.next()) |part| {
-            try rv.appendCopy(allocator, part);
+            try rv.append(allocator, part);
         }
 
         std.sort.insertion([]const u8, rv.tags.items, {}, lessThanTags);

@@ -7,8 +7,8 @@ pub const MetricType = enum {
     Unknown,
 };
 
-// TODO(remy): comment
-// TODO(remy): unit test
+/// TagsSetUnmanaged is a list of tags, always allocating the memory when
+/// adding a tag.
 pub const TagsSetUnmanaged = struct {
     tags: std.ArrayListUnmanaged([]const u8),
 
@@ -23,9 +23,8 @@ pub const TagsSetUnmanaged = struct {
         self.tags.deinit(allocator);
     }
 
-    // TODO(remy): comment
-    // TODO(remy): unit test
-    pub fn appendCopy(self: *TagsSetUnmanaged, allocator: std.mem.Allocator, tag: []const u8) !void {
+    /// append copies the tag into the current tags set.
+    pub fn append(self: *TagsSetUnmanaged, allocator: std.mem.Allocator, tag: []const u8) !void {
         const t = try allocator.alloc(u8, tag.len);
         std.mem.copyForwards(u8, t, tag);
         try self.tags.append(allocator, t);
