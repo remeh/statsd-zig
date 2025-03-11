@@ -60,6 +60,7 @@ pub const MeasureAllocator = struct {
 
 test "measure allocator counter and memory leak" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+
     var measure_allocator = MeasureAllocator.init(arena.allocator());
 
     var loop_count: u32 = 0;

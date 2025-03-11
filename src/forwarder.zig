@@ -195,30 +195,6 @@ pub const Forwarder = struct {
         return tx;
     }
 
-    fn replay_old_transactions(self: *Forwarder, maxReplayed: usize) void {
-        var i: usize = 0;
-        while (i < maxReplayed) : (i += 1) {
-            if (self.transactions.items.len == 0) {
-                break;
-            }
-            var tx = self.transactions.orderedRemove(0);
-            self.send_http_request(tx) catch |err| {
-                std.log.warn("error while retrying a transaction: {s}", .{@errorName(err)});
-                if (tx.tries < max_retry_per_transaction) {
-                    tx.tries += 1;
-                    self.transactions.append(self.gpa, tx) catch |err2| {
-                        tx.deinit();
-                        std.log.err("can't store the failing transaction {s}", .{@errorName(err2)});
-                    };
-                } else {
-                    tx.deinit();
-                    std.log.err("this transaction of {d} bytes dating from {d} has been dropped.", .{ tx.data.items.len, tx.bucket });
-                }
-                break; // useless to try more transaction right now
-            };
-        }
-    }
-
     // TODO(remy): implement a separate serializer
     // TODO(remy): comment
     // TODO(remy): unit test
@@ -305,8 +281,6 @@ const ForwarderThread = struct {
                 std.time.sleep(1000000000);
             };
 
-            // TODO(remy): implement sending transactions from the backlog
-
             // is there something to process?
             while (!context.q.isEmpty()) {
                 if (context.q.get()) |node| {
@@ -335,6 +309,8 @@ const ForwarderThread = struct {
                     context.gpa.destroy(node);
                 }
             }
+
+            context.replay_backlog_transactions(3);
         }
     }
 
@@ -454,6 +430,30 @@ const ForwarderThread = struct {
             else => {
                 std.log.err("send_http_request_native: http response error: {any}", .{r.status});
             },
+        }
+    }
+
+    fn replay_backlog_transactions(self: *ForwarderThread, maxReplayed: usize) void {
+        var i: usize = 0;
+        while (i < maxReplayed) : (i += 1) {
+            if (self.backlog.items.len == 0) {
+                break;
+            }
+            var tx = self.backlog.orderedRemove(0);
+            self.send_http_request(tx) catch |err| {
+                std.log.warn("error while retrying a transaction: {s}", .{@errorName(err)});
+                if (tx.tries < max_retry_per_transaction) {
+                    tx.tries += 1;
+                    self.backlog.append(self.gpa, tx) catch |err2| {
+                        tx.deinit();
+                        std.log.err("can't store the failing transaction {s}", .{@errorName(err2)});
+                    };
+                } else {
+                    tx.deinit();
+                    std.log.err("this transaction of {d} bytes dating from {d} has been dropped.", .{ tx.data.items.len, tx.bucket });
+                }
+                break; // useless to try more transaction right now
+            };
         }
     }
 };

@@ -14,7 +14,7 @@ pub const Packet = struct {
 fn open_socket_udp() !i32 {
     const sockfd: i32 = try std.posix.socket(
         std.posix.AF.INET,
-        std.posix.SOCK.DGRAM | std.posix.SOCK.CLOEXEC,
+        std.posix.SOCK.DGRAM | std.posix.SOCK.CLOEXEC | std.posix.SOCK.NONBLOCK,
         0,
     );
     var addr: std.net.Address = try std.net.Address.parseIp4("127.0.0.1", 8125);
@@ -25,7 +25,7 @@ fn open_socket_udp() !i32 {
 fn open_socket_uds() !i32 {
     const sockfd: i32 = try std.posix.socket(
         std.posix.AF.UNIX,
-        std.posix.SOCK.DGRAM | std.posix.SOCK.CLOEXEC,
+        std.posix.SOCK.DGRAM | std.posix.SOCK.CLOEXEC | std.posix.SOCK.NONBLOCK,
         0,
     );
     var addr: std.net.Address = try std.net.Address.initUnix("statsd.sock");
@@ -106,6 +106,8 @@ pub fn listener(context: *ThreadContext) !void {
                 }};
                 var kev: std.posix.Kevent = undefined;
                 const changelist = @as(*const [1]std.posix.Kevent, &kev);
+                // FIXME(remy): because of O_NONBLOCK, this is always immediately returning
+                //              instead of blocking.
                 _ = try std.posix.kevent(kq, changelist, &events, null);
             },
             else => {},
