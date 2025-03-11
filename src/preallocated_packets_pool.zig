@@ -10,8 +10,9 @@ pub const PreallocatedPacketsPool = struct {
     items: AtomicQueue(Packet),
 
     /// init prepares a preallocated packets pool.
-    pub fn init(allocator: std.mem.Allocator, size: usize) !PreallocatedPacketsPool {
-        var rv = PreallocatedPacketsPool{
+    pub fn init(allocator: std.mem.Allocator, size: usize) !*PreallocatedPacketsPool {
+        const rv = try allocator.create(PreallocatedPacketsPool);
+        rv.* = .{
             .allocator = allocator,
             .items = AtomicQueue(Packet).init(),
         };
@@ -35,6 +36,7 @@ pub const PreallocatedPacketsPool = struct {
         while (self.get()) |node| {
             self.allocator.destroy(node);
         }
+        self.allocator.destroy(self);
     }
 
     pub fn get(self: *PreallocatedPacketsPool) ?*AtomicQueue(Packet).Node {

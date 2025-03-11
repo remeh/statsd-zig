@@ -391,7 +391,7 @@ test "sampling counter" {
     m.value = 20;
 
     try sampler.sample(m);
-    current_bucket = try sampler.current_bucket(); 
+    current_bucket = try sampler.current_bucket();
     for (current_bucket.series.values()) |serie| {
         assert(serie.value == 70.0);
         assert(serie.samples == 2);

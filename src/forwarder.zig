@@ -12,10 +12,10 @@ const Signal = @import("signal.zig").Signal;
 const metric = @import("metric.zig");
 const protobuf = @import("protobuf.zig");
 
-//const series_endpoint = "https://agent.datadoghq.com/api/v1/series";
-//const sketches_endpoint = "https://agent.datadoghq.com/api/beta/sketches";
-const series_endpoint = "http://localhost:8080";
-const sketches_endpoint = "http://localhost:8080";
+const series_endpoint = "https://agent.datadoghq.com/api/v1/series";
+const sketches_endpoint = "https://agent.datadoghq.com/api/beta/sketches";
+//const series_endpoint = "http://localhost:8080";
+//const sketches_endpoint = "http://localhost:8080";
 
 const headerContentTypeJson: [*:0]const u8 = "Content-Type: application/json";
 const headerContentTypeProto: [*:0]const u8 = "Content-Type: application/x-protobuf";

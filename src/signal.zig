@@ -25,7 +25,7 @@ pub const Signal = struct {
                 return .{
                     .notification_fd = eventfd,
                     .poll_fd = @intCast(epfd),
-                };                
+                };
             },
             .netbsd, .openbsd, .macos => {
                 const kq = try std.posix.kqueue();
@@ -37,7 +37,7 @@ pub const Signal = struct {
             else => return .{
                 .notification_fd = 0,
                 .poll_fd = 0,
-            }
+            },
         }
     }
 
@@ -64,13 +64,13 @@ pub const Signal = struct {
             },
             .netbsd, .openbsd, .macos => {
                 var events: [10]std.posix.Kevent = undefined;
-                const sec = ms_timeout/1000;
+                const sec = ms_timeout / 1000;
                 const nsec = (ms_timeout % 1000) * 1000000;
-                _ = try std.posix.kevent(self.poll_fd, &.{}, &events, &.{.sec = sec, .nsec = nsec});
+                _ = try std.posix.kevent(self.poll_fd, &.{}, &events, &.{ .sec = sec, .nsec = nsec });
             },
             else => {
                 std.time.sleep(100000);
-            }
+            },
         }
     }
 
