@@ -134,6 +134,9 @@ pub const Sampler = struct {
         return bucket;
     }
 
+    /// sample a metric in this sampler.
+    /// the metric memory is owned by the arena in the main thread: data
+    /// from this metric has to be copied if it needs to survive an arena reset.
     pub fn sample(self: *Sampler, m: metric.Metric) !void {
         self.mutex.lock();
         const bucket = try self.current_bucket();
@@ -180,7 +183,10 @@ pub const Sampler = struct {
         const name = try bucket.arena.allocator().alloc(u8, m.name.len);
         std.mem.copyForwards(u8, name, m.name);
 
-        // TODO(remy): could we steal these tags from the metric instead?
+        // FIXME(remy): for now, we have to copy the tagset since the metric memory
+        // lives in the arena of the main thread.
+        // If it were to live in the same gpa as one used by the bucket, we
+        // would be able to steal these tags instead and not copy them.
         var tags = TagsSetUnmanaged.empty;
         for (m.tags.tags.items) |tag| {
             try tags.append(bucket.arena.allocator(), tag);
@@ -219,7 +225,10 @@ pub const Sampler = struct {
         const name = try bucket.arena.allocator().alloc(u8, m.name.len);
         std.mem.copyForwards(u8, name, m.name);
 
-        // TODO(remy): instead of copying, could we steal these tags from the metric?
+        // FIXME(remy): for now, we have to copy the tagset since the metric memory
+        // lives in the arena of the main thread.
+        // If it were to live in the same gpa as one used by the bucket, we
+        // would be able to steal these tags instead and not copy them.
         var tags = TagsSetUnmanaged.empty;
         for (m.tags.tags.items) |tag| {
             try tags.append(bucket.arena.allocator(), tag);

@@ -40,6 +40,8 @@ pub const Parser = struct {
         return rv;
     }
 
+    // TODO(remy): do not use an ArrayList but something fixed to avoid
+    // constant reallocation.
     pub fn parse_packet(allocator: std.mem.Allocator, metric_packet: Packet) !std.ArrayList(Metric) {
         var iterator = std.mem.splitSequence(u8, metric_packet.payload[0..metric_packet.len], "\n");
         var part: ?[]const u8 = iterator.next();

@@ -37,8 +37,8 @@ pub const Listener = struct {
             .packets_pool = undefined,
         };
 
-        // pre-alloc 256 packets that will be re-used to contain the read data
-        // these packets will do round-trips between the listener and the parser.
+        // pre-alloc a given amout of packets that will be re-used to contain the read data,
+        // these packets will do round-trips between the listener thread and the main thread.
         listener.packets_pool = try PreallocatedPacketsPool.init(gpa, listener_config.packets_pool_size);
 
         const thread_context = try gpa.create(ListenerThread);
@@ -62,6 +62,9 @@ pub const Listener = struct {
         self.thread.running.store(false, .release);
         self.pthread.join();
         self.packets_pool.deinit();
+        while (self.thread.q.get()) |node| {
+            self.gpa.destroy(node);
+        }
         self.gpa.destroy(self.thread);
     }
 };
