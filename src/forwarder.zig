@@ -222,6 +222,10 @@ pub const Forwarder = struct {
 
         const value: f32 = switch (serie.metric_type) {
             .Gauge => serie.value,
+            // FIXME(remy): this seems to be strangely inaccurate when we have
+            // a VERY LARGE amount of samples (millions of samples for the same
+            // metric, e.g. a same metric sent 200k times per second).
+            // Could it be because of the f32 precision?
             .Counter => serie.value / @as(f32, @floatFromInt(serie.samples)),
             else => unreachable,
         };
