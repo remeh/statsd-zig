@@ -24,6 +24,7 @@ pub const Serie = struct {
     value: f32,
 
     pub fn deinit(self: *Serie, allocator: std.mem.Allocator) void {
+        allocator.free(self.metric_name);
         self.tags.deinit(allocator);
     }
 };
@@ -35,6 +36,7 @@ pub const Distribution = struct {
     sketch: DDSketch,
 
     pub fn deinit(self: *Distribution, allocator: std.mem.Allocator) void {
+        allocator.free(self.metric_name);
         self.tags.deinit(allocator);
         self.sketch.deinit();
     }
@@ -45,7 +47,7 @@ pub const Distribution = struct {
 /// mechanism, but also to keep track of events received with a timestamp in the past.
 /// All the memory of the objects owned by this bucket is part of the arena.
 const Bucket = struct {
-    arena: std.heap.ArenaAllocator,
+    gpa: std.mem.Allocator,
     interval_start: u64 = 0, // start timestamp of the interval, aligned to 10s
     interval: u64 = 10,
     // TODO(remy): benchmark against std.AutoHashMapUnmanaged
@@ -56,7 +58,7 @@ const Bucket = struct {
     pub fn init(gpa: std.mem.Allocator, interval_start: u64, interval: u64) !*Bucket {
         const bucket = try gpa.create(Bucket);
         bucket.* = .{
-            .arena = std.heap.ArenaAllocator.init(gpa),
+            .gpa = gpa,
             .interval_start = interval_start,
             .interval = interval,
             .distributions = .empty,
@@ -66,11 +68,16 @@ const Bucket = struct {
         return bucket;
     }
 
-    pub fn deinit(self: *Bucket, gpa: std.mem.Allocator) void {
+    pub fn deinit(self: *Bucket) void {
+        for (self.distributions.values()) |*dist| {
+            dist.deinit(self.gpa);
+        }
+        for (self.series.values()) |*serie| {
+            serie.deinit(self.gpa);
+        }
         self.distributions = .empty;
         self.series = .empty;
-        _ = self.arena.reset(.free_all);
-        gpa.destroy(self);
+        self.gpa.destroy(self);
     }
 
     // TODO(remy): comment me
@@ -112,13 +119,13 @@ pub const Sampler = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
+        self.forwarder.deinit();
+
         var it = self.buckets.valueIterator();
         while (it.next()) |bucket| {
-            bucket.*.deinit(self.gpa);
+            bucket.*.deinit();
         }
         self.buckets.deinit(self.gpa);
-
-        self.forwarder.deinit();
     }
 
     /// Not thread-safe.
@@ -168,31 +175,28 @@ pub const Sampler = struct {
     pub fn sampleDistribution(_: *Sampler, bucket: *Bucket, m: metric.Metric, h: u64) !void {
         bucket.mutex.lock();
         defer bucket.mutex.unlock();
-        const k = bucket.distributions.get(h);
+        const k = bucket.distributions.getPtr(h);
 
+        // existing
         if (k) |d| {
             // existing
-            var newDistribution = d;
-            try newDistribution.sketch.insert(@floatCast(m.value));
-            try bucket.distributions.put(bucket.arena.allocator(), h, newDistribution);
+            try d.sketch.insert(@floatCast(m.value));
+            // we don't need to put back in the map since we used the pointer
+            // to modify the sketch directly.
             return;
         }
 
         // not existing
-
-        const name = try bucket.arena.allocator().alloc(u8, m.name.len);
+        const name = try bucket.gpa.alloc(u8, m.name.len);
         std.mem.copyForwards(u8, name, m.name);
-
-        const sketch = DDSketch.initDefault(bucket.arena.allocator());
-
-        try bucket.distributions.put(bucket.arena.allocator(), h, Distribution{
+        try bucket.distributions.put(bucket.gpa, h, Distribution{
             .metric_name = name,
             // FIXME(remy): for now, we have to copy the tagset since the metric memory
             // lives in the arena of the main thread.
             // If it were to live in the same gpa as one used by the bucket, we
             // would be able to steal these tags instead and not copy them.
-            .tags = try m.tags.copy(bucket.arena.allocator()),
-            .sketch = sketch,
+            .tags = try m.tags.copy(bucket.gpa),
+            .sketch = DDSketch.initDefault(bucket.gpa),
         });
         return;
     }
@@ -200,27 +204,22 @@ pub const Sampler = struct {
     pub fn sampleSerie(_: *Sampler, bucket: *Bucket, m: metric.Metric, h: u64) !void {
         bucket.mutex.lock();
         defer bucket.mutex.unlock();
-        const k = bucket.series.get(h);
+        const k = bucket.series.getPtr(h);
 
+        // existing
         if (k) |s| {
-            var newSerie = s;
-            newSerie.samples += 1;
-
+            s.samples += 1;
             switch (s.metric_type) {
-                .Gauge => newSerie.value = m.value,
-                else => newSerie.value += m.value, // Counter
+                .Gauge => s.value = m.value,
+                else => s.value += m.value, // Counter
             }
-
-            try bucket.series.put(bucket.arena.allocator(), h, newSerie);
             return;
         }
 
         // not existing
-
-        const name = try bucket.arena.allocator().alloc(u8, m.name.len);
+        const name = try bucket.gpa.alloc(u8, m.name.len);
         std.mem.copyForwards(u8, name, m.name);
-
-        try bucket.series.put(bucket.arena.allocator(), h, Serie{
+        try bucket.series.put(bucket.gpa, h, Serie{
             .metric_name = name,
             .metric_type = m.type,
             .samples = 1,
@@ -228,7 +227,7 @@ pub const Sampler = struct {
             // lives in the arena of the main thread.
             // If it were to live in the same gpa as one used by the bucket, we
             // would be able to steal these tags instead and not copy them.
-            .tags = try m.tags.copy(bucket.arena.allocator()),
+            .tags = try m.tags.copy(bucket.gpa),
             .value = m.value,
         });
     }
@@ -252,7 +251,7 @@ pub const Sampler = struct {
                 const bucket = kv.value;
                 std.log.debug("flushing bucket {d}", .{bucket.interval_start});
                 try self.forwarder.new_transaction(bucket.interval_start, bucket.series, bucket.distributions);
-                bucket.deinit(self.gpa);
+                bucket.deinit();
             }
         }
     }
