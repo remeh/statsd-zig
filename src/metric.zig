@@ -29,6 +29,15 @@ pub const TagsSetUnmanaged = struct {
         std.mem.copyForwards(u8, t, tag);
         try self.tags.append(allocator, t);
     }
+
+    /// copy returns a TagsSetUnmanaged with all internal tags copied.
+    pub fn copy(self: *const TagsSetUnmanaged, allocator: std.mem.Allocator) !TagsSetUnmanaged {
+        var c: TagsSetUnmanaged = .empty;
+        for (self.tags.items) |item| {
+            try c.append(allocator, item);
+        }
+        return c;
+    }
 };
 
 // TODO(remy): comment

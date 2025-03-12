@@ -149,7 +149,7 @@ pub const ListenerThread = struct {
                         .udata = 0,
                     };
                     var out: [1]std.posix.Kevent = undefined;
-                    _ = try std.posix.kevent(kq, &.{event}, &out, .{ .sec = 2, .nsec = 0 });
+                    _ = try std.posix.kevent(kq, &.{event}, &out, &.{ .sec = 2, .nsec = 0 });
                 },
                 else => {},
             }

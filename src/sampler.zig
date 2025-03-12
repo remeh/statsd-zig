@@ -183,20 +183,15 @@ pub const Sampler = struct {
         const name = try bucket.arena.allocator().alloc(u8, m.name.len);
         std.mem.copyForwards(u8, name, m.name);
 
-        // FIXME(remy): for now, we have to copy the tagset since the metric memory
-        // lives in the arena of the main thread.
-        // If it were to live in the same gpa as one used by the bucket, we
-        // would be able to steal these tags instead and not copy them.
-        var tags = TagsSetUnmanaged.empty;
-        for (m.tags.tags.items) |tag| {
-            try tags.append(bucket.arena.allocator(), tag);
-        }
-
         const sketch = DDSketch.initDefault(bucket.arena.allocator());
 
         try bucket.distributions.put(bucket.arena.allocator(), h, Distribution{
             .metric_name = name,
-            .tags = tags,
+            // FIXME(remy): for now, we have to copy the tagset since the metric memory
+            // lives in the arena of the main thread.
+            // If it were to live in the same gpa as one used by the bucket, we
+            // would be able to steal these tags instead and not copy them.
+            .tags = try m.tags.copy(bucket.arena.allocator()),
             .sketch = sketch,
         });
         return;
@@ -225,20 +220,15 @@ pub const Sampler = struct {
         const name = try bucket.arena.allocator().alloc(u8, m.name.len);
         std.mem.copyForwards(u8, name, m.name);
 
-        // FIXME(remy): for now, we have to copy the tagset since the metric memory
-        // lives in the arena of the main thread.
-        // If it were to live in the same gpa as one used by the bucket, we
-        // would be able to steal these tags instead and not copy them.
-        var tags = TagsSetUnmanaged.empty;
-        for (m.tags.tags.items) |tag| {
-            try tags.append(bucket.arena.allocator(), tag);
-        }
-
         try bucket.series.put(bucket.arena.allocator(), h, Serie{
             .metric_name = name,
             .metric_type = m.type,
             .samples = 1,
-            .tags = tags,
+            // FIXME(remy): for now, we have to copy the tagset since the metric memory
+            // lives in the arena of the main thread.
+            // If it were to live in the same gpa as one used by the bucket, we
+            // would be able to steal these tags instead and not copy them.
+            .tags = try m.tags.copy(bucket.arena.allocator()),
             .value = m.value,
         });
     }
