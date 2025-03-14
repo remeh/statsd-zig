@@ -143,9 +143,13 @@ pub const Forwarder = struct {
         // create the protobuf payload
         var pb = try protobuf.SketchesFromDistributions(self.gpa, self.config, dists, bucket);
         defer pb.deinit();
-        const data = try pb.encode(self.gpa);
-        try tx.data.appendSlice(self.gpa, data); // FIXME(remy): avoid this copy
-        self.gpa.free(data);
+
+        // to avoid a copy, directly use the data from the encoding
+        // it is then owned by the Transaction which will clean it up
+        // once not necessary anymore.
+        const encoded = try pb.encode(self.gpa);
+        tx.data.items = encoded;
+        tx.data.capacity = encoded.len;
 
         // compress the transaction
         try tx.compress();
@@ -281,7 +285,7 @@ const ForwarderThread = struct {
         while (running) {
             self.signal.wait(1000) catch |err| {
                 std.log.debug("can't wait for a signal, will sleep instead: {}", .{err});
-                std.time.sleep(1000000000);
+                std.time.sleep(1*std.time.ns_per_s);
             };
 
             if (!self.running.load(.acquire)) {
@@ -336,12 +340,15 @@ const ForwarderThread = struct {
             // .redirect_behavior = .unhandled,
             .payload = tx.data.items,
             .response_storage = .{ .dynamic = &resp },
-            // FIXME(remy): compression header
             .extra_headers = &.{
                 std.http.Header{ .name = "Dd-Api-Key", .value = self.config.apikey },
                 std.http.Header{ .name = "Content-Type", .value = tx.content_type },
-                std.http.Header{ .name = "DD-Agent-Payload", .value = "4.87.0" }, // TODO(remy): document me
-                std.http.Header{ .name = "DD-Agent-Version", .value = "7.40.0" }, // TODO(remy): document me
+                // the protobuf definition used has been shipped with the
+                // agent 7.40.0 (and is version 4.87.0), we let the backend
+                // know about this with these two following headers.
+                std.http.Header{ .name = "DD-Agent-Payload", .value = "4.87.0" },
+                std.http.Header{ .name = "DD-Agent-Version", .value = "7.40.0" },
+
                 std.http.Header{
                     .name = "Content-Encoding",
                     .value = switch (tx.compression_type) {
@@ -408,7 +415,6 @@ pub const Transaction = struct {
     bucket: u64,
     tries: u8,
 
-    // TODO(remy): this shouldn't return a pointer
     pub fn init(allocator: std.mem.Allocator, url: []const u8, content_type: []const u8, compression_type: compressionType, bucket: u64) !*Transaction {
         const rv = try allocator.create(Transaction);
         rv.* = Transaction{
