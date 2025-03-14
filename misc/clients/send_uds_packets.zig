@@ -45,7 +45,7 @@ pub fn main() !void {
     const target_rate_per_ms: f64 = min_metrics_per_s / 500;
     std.log.debug("will have to send {d} metrics/ms", .{target_rate_per_ms});
     const packets_to_send_per_cycle: u64 = 1 + @as(u64, @intFromFloat(target_rate_per_ms)) / metrics_per_packet;
-    std.log.debug("meaning we'll have to send {d} packets per cycle (before a 1ms sleep)", .{packets_to_send_per_cycle});
+    std.log.debug("meaning we'll have to send {d} packets per loop iteration (before a 1ms sleep)", .{packets_to_send_per_cycle});
 
 
     while (true) {

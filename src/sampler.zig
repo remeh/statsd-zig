@@ -72,9 +72,11 @@ const Bucket = struct {
         for (self.distributions.values()) |*dist| {
             dist.deinit(self.gpa);
         }
+        self.distributions.deinit(self.gpa);
         for (self.series.values()) |*serie| {
             serie.deinit(self.gpa);
         }
+        self.series.deinit(self.gpa);
         self.distributions = .empty;
         self.series = .empty;
         self.gpa.destroy(self);
