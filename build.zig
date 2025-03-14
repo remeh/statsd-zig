@@ -21,10 +21,6 @@ pub fn build(b: *std.Build) void {
     });
     exe.root_module.addImport("protobuf", protobuf_dep.module("protobuf"));
 
-    exe.linkLibC();
-    // TODO(remy): do not build with libcurl on linux where it's not used anymore
-    exe.linkSystemLibrary("curl");
-
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);
@@ -49,10 +45,6 @@ pub fn build(b: *std.Build) void {
     });
     tests.root_module.addImport("protobuf", protobuf_dep.module("protobuf"));
 
-    tests.linkLibC();
-
-    // TODO(remy): do not build with libcurl on linux where it's not used anymore
-    tests.linkSystemLibrary("curl");
     const run_tests = b.addRunArtifact(tests);
     test_step.dependOn(&run_tests.step);
 

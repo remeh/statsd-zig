@@ -11,13 +11,13 @@ fn connectUnixSocket(path: []const u8) !std.net.Stream {
         std.posix.SOCK.DGRAM,
         0,
     );
+
     errdefer std.net.Stream.close(.{ .handle = sockfd });
 
     var addr = try std.net.Address.initUnix(path);
     try std.posix.connect(sockfd, &addr.any, addr.getOsSockLen());
 
     return .{ .handle = sockfd };
-
 }
 
 pub fn main() !void {
@@ -58,7 +58,7 @@ pub fn main() !void {
 
             var packets_to_send = packets_to_send_per_cycle;
             while (packets_to_send > 0) : (packets_to_send -= 1) {
-                try stream.writer().writeAll(payload.items);
+                try stream.writeAll(payload.items);
                 sent += metrics_per_packet;
             }
 

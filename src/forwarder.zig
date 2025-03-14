@@ -1,8 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const c = @cImport(@cInclude("curl/curl.h"));
-
 const AtomicQueue = @import("atomic_queue.zig").AtomicQueue;
 const Distribution = @import("sampler.zig").Distribution;
 const Config = @import("config.zig").Config;
@@ -17,8 +15,8 @@ const sketches_endpoint = "https://agent.datadoghq.com/api/beta/sketches";
 //const series_endpoint = "http://localhost:8080";
 //const sketches_endpoint = "http://localhost:8080";
 
-const headerContentTypeJson: [*:0]const u8 = "Content-Type: application/json";
-const headerContentTypeProto: [*:0]const u8 = "Content-Type: application/x-protobuf";
+const headerContentTypeJson: []const u8 = "Content-Type: application/json";
+const headerContentTypeProto: []const u8 = "Content-Type: application/x-protobuf";
 
 const compressionType = enum {
     Gzip,
@@ -43,9 +41,9 @@ pub const Forwarder = struct {
     gpa: std.mem.Allocator,
     config: Config,
     consts: struct {
-        apikey_header: [:0]const u8,
-        series_url: [:0]const u8,
-        sketches_url: [:0]const u8,
+        apikey_header: []const u8,
+        series_url: []const u8,
+        sketches_url: []const u8,
     },
     pthread: std.Thread,
     thread: *ForwarderThread,
@@ -55,9 +53,9 @@ pub const Forwarder = struct {
             .gpa = gpa,
             .config = config,
             .consts = .{
-                .apikey_header = try std.fmt.allocPrintZ(gpa, "Dd-Api-Key: {s}", .{config.apikey}),
-                .series_url = try std.fmt.allocPrintZ(gpa, "{s}?api_key={s}", .{ series_endpoint, config.apikey }),
-                .sketches_url = try std.fmt.allocPrintZ(gpa, "{s}?api_key={s}", .{ sketches_endpoint, config.apikey }),
+                .apikey_header = try std.fmt.allocPrint(gpa, "Dd-Api-Key: {s}", .{config.apikey}),
+                .series_url = try std.fmt.allocPrint(gpa, "{s}?api_key={s}", .{ series_endpoint, config.apikey }),
+                .sketches_url = try std.fmt.allocPrint(gpa, "{s}?api_key={s}", .{ sketches_endpoint, config.apikey }),
             },
             .pthread = undefined,
             .thread = undefined,
@@ -274,7 +272,7 @@ const ForwarderThread = struct {
     running: std.atomic.Value(bool),
     consts: struct {
         // data owned by the main Forwarder instance.
-        apikey_header: [:0]const u8,
+        apikey_header: []const u8,
     },
 
     fn run(self: *ForwarderThread) void {
@@ -324,71 +322,6 @@ const ForwarderThread = struct {
     }
 
     fn send_http_request(self: *ForwarderThread, tx: *Transaction) !void {
-        if (self.config.force_curl) {
-            return self.send_http_request_curl(tx);
-        }
-
-        switch (builtin.os.tag) {
-            .linux => return self.send_http_request_native(tx),
-            else => return self.send_http_request_curl(tx),
-        }
-        return self.send_http_request_native(tx);
-    }
-
-    fn send_http_request_curl(self: *ForwarderThread, tx: *Transaction) !void {
-        var failed: bool = false;
-        var curl: ?*c.CURL = null;
-        var res: c.CURLcode = undefined;
-        var headers: [*c]c.curl_slist = null;
-
-        curl = c.curl_easy_init();
-        if (curl != null) {
-            // url
-            _ = c.curl_easy_setopt(curl, c.CURLOPT_URL, @as([*:0]const u8, @ptrCast(tx.url)));
-
-            // body
-            _ = c.curl_easy_setopt(curl, c.CURLOPT_POSTFIELDSIZE, tx.data.items.len);
-            _ = c.curl_easy_setopt(curl, c.CURLOPT_POST, @as(c_int, 1));
-            _ = c.curl_easy_setopt(curl, c.CURLOPT_POSTFIELDS, @as([*:0]const u8, @ptrCast(tx.data.items)));
-
-            // http headers
-            headers = c.curl_slist_append(headers, tx.content_type);
-            headers = c.curl_slist_append(headers, "DD-Agent-Payload: 4.87.0"); // TODO(remy): document me
-            headers = c.curl_slist_append(headers, "DD-Agent-Version: 7.40.0"); // TODO(remy): document me
-            switch (tx.compression_type) {
-                .Gzip => headers = c.curl_slist_append(headers, "Content-Encoding: gzip"),
-                // When using zlib compression, the Content-Encoding header should
-                // have the `deflate`  value...
-                // https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Content-Encoding
-                // Don't ask my why it's not the deflate compression who uses the deflate value,
-                // I don't make the rules.
-                .Zlib => headers = c.curl_slist_append(headers, "Content-Encoding: deflate"),
-            }
-            headers = c.curl_slist_append(headers, "User-Agent: datadog-agent/7.40.0");
-            headers = c.curl_slist_append(headers, self.consts.apikey_header);
-            _ = c.curl_easy_setopt(curl, c.CURLOPT_HTTPHEADER, headers);
-
-            // perform the call
-            res = c.curl_easy_perform(curl);
-            if (res != @as(c_uint, @bitCast(c.CURLE_OK))) {
-                _ = c.printf("curl_easy_perform() failed: %s\n", c.curl_easy_strerror(res));
-                failed = true;
-            }
-
-            c.curl_slist_free_all(headers);
-            c.curl_easy_cleanup(curl);
-        }
-
-        c.curl_global_cleanup();
-
-        if (failed) {
-            return ForwarderError.RequestFailed;
-        } else {
-            std.log.debug("http flush done, request payload size: {}", .{tx.data.items.len});
-        }
-    }
-
-    fn send_http_request_native(self: *ForwarderThread, tx: *Transaction) !void {
         // http client
         var http_client = std.http.Client{ .allocator = self.gpa };
         defer http_client.deinit();
@@ -397,12 +330,8 @@ const ForwarderThread = struct {
         var resp = std.ArrayList(u8).init(self.gpa);
         defer resp.deinit();
 
-        // TODO(remy): remove me when not supporting curl anymore
-        const url = tx.url[0..std.mem.len(tx.url)];
-        const content_type = tx.content_type[0..std.mem.len(tx.content_type)];
-
         const req_opts = std.http.Client.FetchOptions{
-            .location = .{ .uri = try std.Uri.parse(url) },
+            .location = .{ .uri = try std.Uri.parse(tx.url) },
             .method = .POST,
             // .redirect_behavior = .unhandled,
             .payload = tx.data.items,
@@ -410,7 +339,7 @@ const ForwarderThread = struct {
             // FIXME(remy): compression header
             .extra_headers = &.{
                 std.http.Header{ .name = "Dd-Api-Key", .value = self.config.apikey },
-                std.http.Header{ .name = "Content-Type", .value = content_type },
+                std.http.Header{ .name = "Content-Type", .value = tx.content_type },
                 std.http.Header{ .name = "DD-Agent-Payload", .value = "4.87.0" }, // TODO(remy): document me
                 std.http.Header{ .name = "DD-Agent-Version", .value = "7.40.0" }, // TODO(remy): document me
                 std.http.Header{
@@ -473,16 +402,14 @@ const ForwarderThread = struct {
 pub const Transaction = struct {
     allocator: std.mem.Allocator,
     compression_type: compressionType = .Zlib,
-    // TODO(remy): when not using curl anymore, these ones won't have to be finished by a \0
-    content_type: [*:0]const u8,
-    // TODO(remy): when not using curl anymore, these ones won't have to be finished by a \0
-    url: [*:0]const u8,
+    content_type: []const u8,
+    url: []const u8,
     data: std.ArrayListUnmanaged(u8),
     bucket: u64,
     tries: u8,
 
     // TODO(remy): this shouldn't return a pointer
-    pub fn init(allocator: std.mem.Allocator, url: [*:0]const u8, content_type: [*:0]const u8, compression_type: compressionType, bucket: u64) !*Transaction {
+    pub fn init(allocator: std.mem.Allocator, url: []const u8, content_type: []const u8, compression_type: compressionType, bucket: u64) !*Transaction {
         const rv = try allocator.create(Transaction);
         rv.* = Transaction{
             .allocator = allocator,
