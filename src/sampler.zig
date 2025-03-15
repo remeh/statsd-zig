@@ -12,10 +12,10 @@ const Forwarder = @import("forwarder.zig").Forwarder;
 const TagsSetUnmanaged = @import("metric.zig").TagsSetUnmanaged;
 const Transaction = @import("forwarder.zig").Transaction;
 
-// TODO(remy): comment me
+/// default sampling interval is 10s.
 const sampling_interval: u64 = 10;
 
-// TODO(remy): comment me
+/// Serie is a list of values of a metric of type gauge or counter.
 pub const Serie = struct {
     metric_name: []const u8,
     metric_type: metric.MetricType,
@@ -29,7 +29,8 @@ pub const Serie = struct {
     }
 };
 
-// TODO(remy): comment me
+/// Serie is a list of values of a metric of type distribution,
+/// stored in a DDSketch.
 pub const Distribution = struct {
     metric_name: []const u8,
     tags: TagsSetUnmanaged,
@@ -82,9 +83,9 @@ const Bucket = struct {
         self.gpa.destroy(self);
     }
 
-    // TODO(remy): comment me
+    /// key returns a key aligning the timestamp on the sampling interval.
     pub fn key(timestamp: i64) u64 {
-        return @intCast(@divTrunc(timestamp, 10) * 10);
+        return @intCast(@divTrunc(timestamp, sampling_interval) * sampling_interval);
     }
 
     /// size returns how many different series + distributions are sampled in this bucket.
@@ -95,7 +96,10 @@ const Bucket = struct {
     }
 };
 
-// TODO(remy): comment me
+/// Sampler receives gauges, counters and distributions, and aggregates them
+/// into a given window interval (10s by default).
+/// The sampler also owns a forwarder, into which are flushed the aggregated
+/// series and sketches to send them to the intake.
 pub const Sampler = struct {
     /// used to create/destroy the bucket entries
     gpa: std.mem.Allocator,
@@ -131,7 +135,7 @@ pub const Sampler = struct {
     }
 
     /// Not thread-safe.
-    pub fn current_bucket(self: *Sampler) !*Bucket {
+    pub fn currentBucket(self: *Sampler) !*Bucket {
         const bucket_key = Bucket.key(std.time.timestamp());
         if (self.buckets.get(bucket_key)) |bucket| {
             return bucket;
@@ -148,7 +152,7 @@ pub const Sampler = struct {
     /// from this metric has to be copied if it needs to survive an arena reset.
     pub fn sample(self: *Sampler, m: metric.Metric) !void {
         self.mutex.lock();
-        const bucket = try self.current_bucket();
+        const bucket = try self.currentBucket();
         self.mutex.unlock();
 
         const h = Sampler.hash(m);
@@ -268,8 +272,6 @@ pub const Sampler = struct {
     }
 };
 
-// TODO(remy): test buckets implementation
-
 test "sampling hashing" {
     const config = Config{
         .hostname = "local",
@@ -290,10 +292,10 @@ test "sampling hashing" {
     m.tags = tags;
 
     try sampler.sample(m);
-    assert((try sampler.current_bucket()).size() == 1);
+    assert((try sampler.currentBucket()).size() == 1);
 
     try sampler.sample(m);
-    assert((try sampler.current_bucket()).size() == 1);
+    assert((try sampler.currentBucket()).size() == 1);
 
     var m2 = try metric.Metric.init(allocator, "this.is.my.metric");
     const tags2 = try Parser.parse_tags(allocator, "#my:tag,second:tag");
@@ -303,7 +305,7 @@ test "sampling hashing" {
     m2.tags = tags2;
 
     try sampler.sample(m2);
-    assert((try sampler.current_bucket()).size() == 1);
+    assert((try sampler.currentBucket()).size() == 1);
 
     var m3 = try metric.Metric.init(allocator, "this.is.my.other.metric");
     const tags3 = try Parser.parse_tags(allocator, "#my:tag,second:tag");
@@ -313,7 +315,7 @@ test "sampling hashing" {
     m3.tags = tags3;
 
     try sampler.sample(m3);
-    assert((try sampler.current_bucket()).size() == 2);
+    assert((try sampler.currentBucket()).size() == 2);
 
     var other_tags = try Parser.parse_tags(allocator, "#my:tag,second:tag,and:other");
     other_tags.deinit(allocator);
@@ -341,19 +343,19 @@ test "sampling gauge" {
     m.tags = .empty;
 
     try sampler.sample(m);
-    try std.testing.expectEqual(1, (try sampler.current_bucket()).size());
+    try std.testing.expectEqual(1, (try sampler.currentBucket()).size());
 
-    var current_bucket = try sampler.current_bucket();
-    for (current_bucket.series.values()) |serie| {
+    var currentBucket = try sampler.currentBucket();
+    for (currentBucket.series.values()) |serie| {
         try std.testing.expectEqual(50.0, serie.value);
     }
 
     m.value = 20;
     try sampler.sample(m);
-    try std.testing.expectEqual(1, (try sampler.current_bucket()).size());
+    try std.testing.expectEqual(1, (try sampler.currentBucket()).size());
 
-    current_bucket = try sampler.current_bucket();
-    for (current_bucket.series.values()) |serie| {
+    currentBucket = try sampler.currentBucket();
+    for (currentBucket.series.values()) |serie| {
         try std.testing.expectEqual(20.0, serie.value);
     }
 
@@ -378,10 +380,10 @@ test "sampling counter" {
     m.tags = .empty;
 
     try sampler.sample(m);
-    try std.testing.expectEqual(1, (try sampler.current_bucket()).size());
+    try std.testing.expectEqual(1, (try sampler.currentBucket()).size());
 
-    var current_bucket = try sampler.current_bucket();
-    var iterator = current_bucket.series.iterator();
+    var currentBucket = try sampler.currentBucket();
+    var iterator = currentBucket.series.iterator();
     if (iterator.next()) |kv| {
         const serie = kv.value_ptr.*;
         assert(serie.value == 50.0);
@@ -391,11 +393,56 @@ test "sampling counter" {
     m.value = 20;
 
     try sampler.sample(m);
-    current_bucket = try sampler.current_bucket();
-    for (current_bucket.series.values()) |serie| {
+    currentBucket = try sampler.currentBucket();
+    for (currentBucket.series.values()) |serie| {
         assert(serie.value == 70.0);
         assert(serie.samples == 2);
     }
 
     sampler.deinit();
 }
+
+test "sampler bucketing" {
+    const config = Config{
+        .hostname = "local",
+        .apikey = "abcdef",
+        .force_curl = false,
+        .max_mem_mb = 20000,
+        .uds = false,
+    };
+    const allocator = std.testing.allocator;
+
+    var sampler = try Sampler.init(allocator, config);
+    defer sampler.deinit();
+
+    try std.testing.expectEqual(0, sampler.buckets.size);
+
+    try sampler.sample(.{
+        .allocator = allocator,
+        .name = "my_test",
+        .value = 10.0,
+        .type = .Counter,
+        .tags = .empty,
+    });
+    try std.testing.expectEqual(1, sampler.buckets.size);
+
+    // make sure we change the bucket
+    std.time.sleep((sampling_interval+1)*std.time.ns_per_s);
+    try sampler.sample(.{
+        .allocator = allocator,
+        .name = "my_test",
+        .value = 10.0,
+        .type = .Counter,
+        .tags = .empty,
+    });
+    try std.testing.expectEqual(2, sampler.buckets.size);
+
+    // not ideal because it's testing for sampling_interval=10 here,
+    // but to be fair it will most likely never change.
+    try std.testing.expectEqual(1000, Bucket.key(1001));
+    try std.testing.expectEqual(1000, Bucket.key(1009));
+    try std.testing.expectEqual(1110, Bucket.key(1111));
+    try std.testing.expectEqual(1110, Bucket.key(1115));
+    try std.testing.expectEqual(1110, Bucket.key(1119));
+}
+

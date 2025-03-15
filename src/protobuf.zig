@@ -67,9 +67,11 @@ test "SketchesFromDistributions" {
     var tags1: TagsSetUnmanaged = .empty;
     try tags1.append(allocator, "first");
     try tags1.append(allocator, "second");
+    defer tags1.deinit(allocator);
     var tags2: TagsSetUnmanaged = .empty;
     try tags2.append(allocator, "third");
     try tags2.append(allocator, "fourth");
+    defer tags2.deinit(allocator);
 
     var dists: [2]Distribution = .{
         Distribution{
@@ -83,8 +85,8 @@ test "SketchesFromDistributions" {
             .sketch = DDSketch.initDefault(allocator),
         },
     };
-    defer dists[0].deinit(allocator);
-    defer dists[1].deinit(allocator);
+    defer dists[0].sketch.deinit();
+    defer dists[1].sketch.deinit();
 
     const payload = try SketchesFromDistributions(allocator, config, dists[0..], 0);
 
