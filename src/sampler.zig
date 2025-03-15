@@ -23,7 +23,7 @@ pub const Serie = struct {
     metric_type: EventType,
     tags: TagsSetUnmanaged,
     samples: u64,
-    value: f32,
+    value: f64,
 
     pub fn deinit(self: *Serie, allocator: std.mem.Allocator) void {
         allocator.free(self.metric_name);
