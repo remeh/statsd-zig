@@ -7,7 +7,7 @@ const Config = @import("config.zig").Config;
 const Serie = @import("sampler.zig").Serie;
 const Signal = @import("signal.zig").Signal;
 
-const metric = @import("metric.zig");
+const event = @import("event.zig");
 const protobuf = @import("protobuf.zig");
 
 const series_endpoint = "https://agent.datadoghq.com/api/v1/series";

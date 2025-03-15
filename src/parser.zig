@@ -1,10 +1,10 @@
 const std = @import("std");
 const assert = @import("std").debug.assert;
 
-const Metric = @import("metric.zig").Metric;
-const MetricType = @import("metric.zig").MetricType;
+const Event = @import("event.zig").Event;
+const EventType = @import("event.zig").EventType;
 const Packet = @import("listener.zig").Packet;
-const TagsSetUnmanaged = @import("metric.zig").TagsSetUnmanaged;
+const TagsSetUnmanaged = @import("event.zig").TagsSetUnmanaged;
 
 pub const ParsingError = error{
     MalformedNameValue,
@@ -14,14 +14,14 @@ pub const ParsingError = error{
 };
 
 pub const Parser = struct {
-    fn split_name_and_value(allocator: std.mem.Allocator, string: []const u8) !Metric {
+    fn split_name_and_value(allocator: std.mem.Allocator, string: []const u8) !Event {
         var iterator = std.mem.splitSequence(u8, string, ":");
         var part: ?[]const u8 = iterator.next();
-        var rv: Metric = undefined;
+        var rv: Event = undefined;
         var idx: u8 = 0;
         while (part != null) {
             if (idx == 0) {
-                rv = try Metric.init(allocator, part.?);
+                rv = try Event.initMetric(allocator, part.?);
                 errdefer rv.deinit();
                 idx += 1;
             } else if (idx == 1) {
@@ -42,11 +42,11 @@ pub const Parser = struct {
 
     // TODO(remy): do not use an ArrayList but something fixed to avoid
     // constant reallocation.
-    pub fn parse_packet(allocator: std.mem.Allocator, metric_packet: Packet) !std.ArrayList(Metric) {
+    pub fn parse_packet(allocator: std.mem.Allocator, metric_packet: Packet) !std.ArrayList(Event) {
         var iterator = std.mem.splitSequence(u8, metric_packet.payload[0..metric_packet.len], "\n");
         var part: ?[]const u8 = iterator.next();
 
-        var rv = std.ArrayList(Metric).init(allocator);
+        var rv = std.ArrayList(Event).init(allocator);
         errdefer rv.deinit();
 
         while (part != null) {
@@ -54,7 +54,7 @@ pub const Parser = struct {
                 part = iterator.next();
                 continue;
             }
-            const m: Metric = try parse_metric(allocator, part.?);
+            const m: Event = try parse_metric(allocator, part.?);
             try rv.append(m);
             part = iterator.next();
         }
@@ -62,10 +62,10 @@ pub const Parser = struct {
         return rv;
     }
 
-    pub fn parse_metric(allocator: std.mem.Allocator, packet: []const u8) !Metric {
+    pub fn parse_metric(allocator: std.mem.Allocator, packet: []const u8) !Event {
         var iterator = std.mem.splitSequence(u8, packet, "|");
         var part: ?[]const u8 = iterator.next();
-        var rv: Metric = undefined;
+        var rv: Event = undefined;
 
         var idx: u8 = 0;
         while (part != null) {
@@ -129,11 +129,12 @@ pub const Parser = struct {
 
 test "split_name_and_value" {
     const packet = "hello:5.0";
+    const allocator = std.testing.allocator;
 
-    var m = try Parser.split_name_and_value(std.testing.allocator, packet);
+    var m = try Parser.split_name_and_value(allocator, packet);
     assert(std.mem.eql(u8, m.name, "hello"));
     assert(m.value == 5.0);
-    m.deinit();
+    m.deinit(allocator);
 }
 
 test "parse_metric" {
@@ -144,7 +145,7 @@ test "parse_metric" {
     const packet = buf.items;
 
     var m = try Parser.parse_metric(std.testing.allocator, packet);
-    defer m.deinit();
+    defer m.deinit(allocator);
     assert(std.mem.eql(u8, m.name, "hello"));
     assert(m.value == 5.0);
 

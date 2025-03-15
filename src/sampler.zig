@@ -4,12 +4,14 @@ const warn = std.log.warn;
 const fnv1a = std.hash.Fnv1a_64;
 const assert = std.debug.assert;
 
-const metric = @import("metric.zig");
+const Event = @import("event.zig").Event;
+const EventType = @import("event.zig").EventType;
 const Config = @import("config.zig").Config;
 const DDSketch = @import("ddsketch.zig").DDSketch;
+const EventErrors = @import("event.zig").EventErrors;
 const Parser = @import("parser.zig").Parser; // used in tests
 const Forwarder = @import("forwarder.zig").Forwarder;
-const TagsSetUnmanaged = @import("metric.zig").TagsSetUnmanaged;
+const TagsSetUnmanaged = @import("event.zig").TagsSetUnmanaged;
 const Transaction = @import("forwarder.zig").Transaction;
 
 /// default sampling interval is 10s.
@@ -18,7 +20,7 @@ const sampling_interval: u64 = 10;
 /// Serie is a list of values of a metric of type gauge or counter.
 pub const Serie = struct {
     metric_name: []const u8,
-    metric_type: metric.MetricType,
+    metric_type: EventType,
     tags: TagsSetUnmanaged,
     samples: u64,
     value: f32,
@@ -147,28 +149,27 @@ pub const Sampler = struct {
         return bucket;
     }
 
-    /// sample a metric in this sampler.
-    /// the metric memory is owned by the arena in the main thread: data
-    /// from this metric has to be copied if it needs to survive an arena reset.
-    pub fn sample(self: *Sampler, m: metric.Metric) !void {
+    /// sample an event in this sampler.
+    /// If the event isn't of a supported type, this method
+    /// returns an EventErrors.UnsupportedType.
+    pub fn sample(self: *Sampler, m: Event) !void {
         self.mutex.lock();
         const bucket = try self.currentBucket();
         self.mutex.unlock();
 
         const h = Sampler.hash(m);
 
-        if (m.type == .Distribution) {
-            return try self.sampleDistribution(bucket, m, h);
+        switch (m.type) {
+            .Distribution => try self.sampleDistribution(bucket, m, h),
+            .Counter, .Gauge => try self.sampleSerie(bucket, m, h),
+            else => return EventErrors.UnsupportedType,
         }
-
-        return try self.sampleSerie(bucket, m, h);
     }
 
     /// sample internal telemetry about the server itself.
     /// Won't return an error but throw debug logs instead.
-    pub fn sampleTelemetry(self: *Sampler, metric_type: metric.MetricType, name: []const u8, value: f32, tags: TagsSetUnmanaged) void {
-        self.sample(metric.Metric{
-            .allocator = undefined,
+    pub fn sampleTelemetry(self: *Sampler, metric_type: EventType, name: []const u8, value: f32, tags: TagsSetUnmanaged) void {
+        self.sample(Event{
             .name = name,
             .value = value,
             .type = metric_type,
@@ -178,7 +179,7 @@ pub const Sampler = struct {
         };
     }
 
-    pub fn sampleDistribution(_: *Sampler, bucket: *Bucket, m: metric.Metric, h: u64) !void {
+    pub fn sampleDistribution(_: *Sampler, bucket: *Bucket, e: Event, h: u64) !void {
         bucket.mutex.lock();
         defer bucket.mutex.unlock();
         const k = bucket.distributions.getPtr(h);
@@ -186,28 +187,28 @@ pub const Sampler = struct {
         // existing
         if (k) |d| {
             // existing
-            try d.sketch.insert(@floatCast(m.value));
+            try d.sketch.insert(@floatCast(e.value));
             // we don't need to put back in the map since we used the pointer
             // to modify the sketch directly.
             return;
         }
 
         // not existing
-        const name = try bucket.gpa.alloc(u8, m.name.len);
-        std.mem.copyForwards(u8, name, m.name);
+        const name = try bucket.gpa.alloc(u8, e.name.len);
+        std.mem.copyForwards(u8, name, e.name);
         try bucket.distributions.put(bucket.gpa, h, Distribution{
             .metric_name = name,
             // FIXME(remy): for now, we have to copy the tagset since the metric memory
             // lives in the arena of the main thread.
             // If it were to live in the same gpa as one used by the bucket, we
             // would be able to steal these tags instead and not copy them.
-            .tags = try m.tags.copy(bucket.gpa),
+            .tags = try e.tags.copy(bucket.gpa),
             .sketch = DDSketch.initDefault(bucket.gpa),
         });
         return;
     }
 
-    pub fn sampleSerie(_: *Sampler, bucket: *Bucket, m: metric.Metric, h: u64) !void {
+    pub fn sampleSerie(_: *Sampler, bucket: *Bucket, e: Event, h: u64) !void {
         bucket.mutex.lock();
         defer bucket.mutex.unlock();
         const k = bucket.series.getPtr(h);
@@ -216,25 +217,25 @@ pub const Sampler = struct {
         if (k) |s| {
             s.samples += 1;
             switch (s.metric_type) {
-                .Gauge => s.value = m.value,
-                else => s.value += m.value, // Counter
+                .Gauge => s.value = e.value,
+                else => s.value += e.value, // Counter
             }
             return;
         }
 
         // not existing
-        const name = try bucket.gpa.alloc(u8, m.name.len);
-        std.mem.copyForwards(u8, name, m.name);
+        const name = try bucket.gpa.alloc(u8, e.name.len);
+        std.mem.copyForwards(u8, name, e.name);
         try bucket.series.put(bucket.gpa, h, Serie{
             .metric_name = name,
-            .metric_type = m.type,
+            .metric_type = e.type,
             .samples = 1,
             // FIXME(remy): for now, we have to copy the tagset since the metric memory
             // lives in the arena of the main thread.
             // If it were to live in the same gpa as one used by the bucket, we
             // would be able to steal these tags instead and not copy them.
-            .tags = try m.tags.copy(bucket.gpa),
-            .value = m.value,
+            .tags = try e.tags.copy(bucket.gpa),
+            .value = e.value,
         });
     }
 
@@ -262,10 +263,10 @@ pub const Sampler = struct {
         }
     }
 
-    fn hash(m: metric.Metric) u64 {
+    fn hash(e: Event) u64 {
         var h = fnv1a.init();
-        h.update(m.name);
-        for (m.tags.tags.items) |tag| {
+        h.update(e.name);
+        for (e.tags.tags.items) |tag| {
             h.update(tag);
         }
         return h.final();
@@ -285,8 +286,8 @@ test "sampling hashing" {
 
     var sampler = try Sampler.init(allocator, config);
     const tags = try Parser.parse_tags(allocator, "#my:tag,second:tag");
-    var m = try metric.Metric.init(allocator, "this.is.my.metric");
-    defer m.deinit();
+    var m = try Event.initMetric(allocator, "this.is.my.metric");
+    defer m.deinit(allocator);
     m.value = 50.0;
     m.type = .Counter;
     m.tags = tags;
@@ -297,9 +298,9 @@ test "sampling hashing" {
     try sampler.sample(m);
     assert((try sampler.currentBucket()).size() == 1);
 
-    var m2 = try metric.Metric.init(allocator, "this.is.my.metric");
+    var m2 = try Event.initMetric(allocator, "this.is.my.metric");
     const tags2 = try Parser.parse_tags(allocator, "#my:tag,second:tag");
-    defer m2.deinit();
+    defer m2.deinit(allocator);
     m2.value = 25.0;
     m2.type = .Counter;
     m2.tags = tags2;
@@ -307,9 +308,9 @@ test "sampling hashing" {
     try sampler.sample(m2);
     assert((try sampler.currentBucket()).size() == 1);
 
-    var m3 = try metric.Metric.init(allocator, "this.is.my.other.metric");
+    var m3 = try Event.initMetric(allocator, "this.is.my.other.metric");
     const tags3 = try Parser.parse_tags(allocator, "#my:tag,second:tag");
-    defer m3.deinit();
+    defer m3.deinit(allocator);
     m3.value = 25.0;
     m3.type = .Counter;
     m3.tags = tags3;
@@ -324,8 +325,6 @@ test "sampling hashing" {
 }
 
 test "sampling gauge" {
-    const allocator = std.testing.allocator;
-
     const config = Config{
         .hostname = "local",
         .apikey = "abcdef",
@@ -334,10 +333,12 @@ test "sampling gauge" {
         .uds = false,
     };
 
+    const allocator = std.testing.allocator;
+
     var sampler = try Sampler.init(allocator, config);
 
-    var m = try metric.Metric.init(allocator, "this.is.my.gauge");
-    defer m.deinit();
+    var m = try Event.initMetric(allocator, "this.is.my.gauge");
+    defer m.deinit(allocator);
     m.value = 50.0;
     m.type = .Gauge;
     m.tags = .empty;
@@ -373,8 +374,8 @@ test "sampling counter" {
     const allocator = std.testing.allocator;
 
     var sampler = try Sampler.init(allocator, config);
-    var m = try metric.Metric.init(allocator, "this.is.my.counter");
-    defer m.deinit();
+    var m = try Event.initMetric(allocator, "this.is.my.counter");
+    defer m.deinit(allocator);
     m.value = 50.0;
     m.type = .Counter;
     m.tags = .empty;
@@ -418,7 +419,6 @@ test "sampler bucketing" {
     try std.testing.expectEqual(0, sampler.buckets.size);
 
     try sampler.sample(.{
-        .allocator = allocator,
         .name = "my_test",
         .value = 10.0,
         .type = .Counter,
@@ -429,7 +429,6 @@ test "sampler bucketing" {
     // make sure we change the bucket
     std.time.sleep((sampling_interval+1)*std.time.ns_per_s);
     try sampler.sample(.{
-        .allocator = allocator,
         .name = "my_test",
         .value = 10.0,
         .type = .Counter,

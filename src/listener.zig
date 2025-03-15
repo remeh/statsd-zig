@@ -2,8 +2,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const AtomicQueue = @import("atomic_queue.zig").AtomicQueue;
-const Metric = @import("metric.zig").Metric;
-const MetricType = @import("metric.zig").MetricType;
+const Event = @import("event.zig").Event;
+const EventType = @import("event.zig").EventType;
 const PreallocatedPacketsPool = @import("preallocated_packets_pool.zig").PreallocatedPacketsPool;
 const Sampler = @import("sampler.zig").Sampler;
 const Signal = @import("signal.zig").Signal;

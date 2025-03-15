@@ -5,7 +5,7 @@ const protobuf = @import("protobuf");
 const Config = @import("config.zig").Config;
 const DDSketch = @import("ddsketch.zig").DDSketch;
 const Distribution = @import("sampler.zig").Distribution;
-const TagsSetUnmanaged = @import("metric.zig").TagsSetUnmanaged;
+const TagsSetUnmanaged = @import("event.zig").TagsSetUnmanaged;
 
 /// SketchesFromDistributions converts the `dists` to a `SketchPayload`
 /// ready to be encoded.

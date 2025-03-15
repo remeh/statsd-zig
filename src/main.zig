@@ -5,7 +5,7 @@ const fmt = std.fmt;
 const assert = std.debug.assert;
 
 const AtomicQueue = @import("atomic_queue.zig").AtomicQueue;
-const metric = @import("metric.zig");
+const event = @import("event.zig");
 const Config = @import("config.zig").Config;
 const Listener = @import("listener.zig").Listener;
 const MeasureAllocator = @import("measure_allocator.zig").MeasureAllocator;
@@ -80,7 +80,7 @@ pub fn main() !void {
 
     var next_flush = std.time.milliTimestamp() + flush_frequency_ms;
     var packets_parsed: u32 = 0;
-    var metrics_parsed: u32 = 0;
+    var events_parsed: u32 = 0;
     var bytes_parsed: u64 = 0;
 
     // pipeline mainloop
@@ -94,11 +94,11 @@ pub fn main() !void {
         while (!listener.thread.q.isEmpty()) {
             if (listener.thread.q.get()) |node| {
                 // parse the packets
-                if (Parser.parse_packet(measured_arena.allocator(), node.data)) |metrics| {
+                if (Parser.parse_packet(measured_arena.allocator(), node.data)) |events| {
                     packets_parsed += 1;
                     // sampling
-                    for (metrics.items) |m| {
-                        metrics_parsed += 1;
+                    for (events.items) |m| {
+                        events_parsed += 1;
                         try sampler.sample(m);
                     }
                 } else |err| {
@@ -124,17 +124,17 @@ pub fn main() !void {
             };
 
             std.log.info("packets parsed: {d}/s ({d} last {d}s)", .{ @divTrunc(packets_parsed, (flush_frequency_ms / 1000)), packets_parsed, flush_frequency_ms / 1000 });
-            std.log.info("metrics parsed: {d}/s ({d} last {d}s)", .{ @divTrunc(metrics_parsed, (flush_frequency_ms / 1000)), metrics_parsed, flush_frequency_ms / 1000 });
+            std.log.info("events parsed: {d}/s ({d} last {d}s)", .{ @divTrunc(events_parsed, (flush_frequency_ms / 1000)), events_parsed, flush_frequency_ms / 1000 });
             std.log.info("reporting {d} bytes used by the parser", .{measured_arena.allocated});
 
             sampler.sampleTelemetry(.Counter, "statsd.parser.packets_parsed", @floatFromInt(packets_parsed), .empty);
-            sampler.sampleTelemetry(.Counter, "statsd.parser.metrics_parsed", @floatFromInt(metrics_parsed), .empty);
+            sampler.sampleTelemetry(.Counter, "statsd.parser.events_parsed", @floatFromInt(events_parsed), .empty);
             sampler.sampleTelemetry(.Counter, "statsd.parser.bytes_parsed", @floatFromInt(bytes_parsed), .empty);
             sampler.sampleTelemetry(.Counter, "statsd.parser.pool.available_packet", @floatFromInt(listener.packets_pool.items.size()), .empty);
             sampler.sampleTelemetry(.Gauge, "statsd.parser.bytes_inuse", @floatFromInt(measured_arena.allocated), .empty);
 
             packets_parsed = 0;
-            metrics_parsed = 0;
+            events_parsed = 0;
             bytes_parsed = 0;
 
             next_flush = next_flush + flush_frequency_ms;
