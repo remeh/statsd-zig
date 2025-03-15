@@ -4,7 +4,7 @@ const builtin = @import("builtin");
 const AtomicQueue = @import("atomic_queue.zig").AtomicQueue;
 const Event = @import("event.zig").Event;
 const EventType = @import("event.zig").EventType;
-const PreallocatedPacketsPool = @import("preallocated_packets_pool.zig").PreallocatedPacketsPool;
+const PreallocatedPool = @import("preallocated_packets_pool.zig").PreallocatedPool;
 const Sampler = @import("sampler.zig").Sampler;
 const Signal = @import("signal.zig").Signal;
 
@@ -27,7 +27,7 @@ pub const Listener = struct {
     gpa: std.mem.Allocator,
     pthread: std.Thread,
     thread: *ListenerThread,
-    packets_pool: *PreallocatedPacketsPool,
+    packets_pool: *PreallocatedPool(Packet),
 
     pub fn init(gpa: std.mem.Allocator, sampler: *Sampler, listener_config: ListenerConfig) !Listener {
         var listener = Listener{
@@ -39,7 +39,14 @@ pub const Listener = struct {
 
         // pre-alloc a given amout of packets that will be re-used to contain the read data,
         // these packets will do round-trips between the listener thread and the main thread.
-        listener.packets_pool = try PreallocatedPacketsPool.init(gpa, listener_config.packets_pool_size);
+        listener.packets_pool = try PreallocatedPool(Packet).init(
+            gpa,
+            listener_config.packets_pool_size,
+            Packet{
+                .payload = std.mem.zeroes([8192]u8),
+                .len = 0,
+            },
+        );
 
         const thread_context = try gpa.create(ListenerThread);
         thread_context.* = .{
@@ -76,7 +83,7 @@ pub const ListenerThread = struct {
     q: AtomicQueue(Packet),
     /// packets buffers available to share data between the listener thread
     /// and the parser thread.
-    b: *PreallocatedPacketsPool,
+    b: *PreallocatedPool(Packet),
     /// is running in UDS
     uds: bool,
     /// used by the listener thread that something has been put for processing
