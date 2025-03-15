@@ -13,6 +13,7 @@ const Parser = @import("parser.zig").Parser;
 const Packet = @import("listener.zig").Packet;
 const Sampler = @import("sampler.zig").Sampler;
 const Signal = @import("signal.zig").Signal;
+const TagsSetUnmanaged = @import("event.zig").TagsSetUnmanaged;
 
 /// flush_frequency represents how often we flush the sampler (in ms).
 pub const flush_frequency_ms = 10000;
@@ -65,7 +66,7 @@ pub fn main() !void {
 
     // creates the listener and spawn the listening thread
     var listener = try Listener.init(gpa.allocator(), &sampler, .{
-        .packets_pool_size = 4096,
+        .packets_pool_size = 128,
         .uds = config.uds,
     });
     defer listener.deinit();
@@ -127,8 +128,12 @@ pub fn main() !void {
             std.log.info("events parsed: {d}/s ({d} last {d}s)", .{ @divTrunc(events_parsed, (flush_frequency_ms / 1000)), events_parsed, flush_frequency_ms / 1000 });
             std.log.info("reporting {d} bytes used by the parser", .{measured_arena.allocated});
 
+            var tag_type_metric = TagsSetUnmanaged.empty;
+            try tag_type_metric.append(measured_arena.allocator(), "type:metric");
+            defer tag_type_metric.deinit(measured_arena.allocator());
+
             sampler.sampleTelemetry(.Counter, "statsd.parser.packets_parsed", @floatFromInt(packets_parsed), .empty);
-            sampler.sampleTelemetry(.Counter, "statsd.parser.events_parsed", @floatFromInt(events_parsed), .empty);
+            sampler.sampleTelemetry(.Counter, "statsd.parser.events_parsed", @floatFromInt(events_parsed), tag_type_metric);
             sampler.sampleTelemetry(.Counter, "statsd.parser.bytes_parsed", @floatFromInt(bytes_parsed), .empty);
             sampler.sampleTelemetry(.Counter, "statsd.parser.pool.available_packet", @floatFromInt(listener.packets_pool.items.size()), .empty);
             sampler.sampleTelemetry(.Gauge, "statsd.parser.bytes_inuse", @floatFromInt(measured_arena.allocated), .empty);
