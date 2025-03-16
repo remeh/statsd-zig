@@ -9,6 +9,7 @@ const Signal = @import("signal.zig").Signal;
 
 const event = @import("event.zig");
 const protobuf = @import("protobuf.zig");
+const sampling_interval = @import("sampler.zig").sampling_interval;
 
 const series_endpoint = "https://agent.datadoghq.com/api/v1/series";
 const sketches_endpoint = "https://agent.datadoghq.com/api/beta/sketches";
@@ -33,7 +34,7 @@ pub const ForwarderError = error{RequestFailed};
 
 /// The Forwarder is the entrypoint to send data to a remote intake.
 ///
-/// Its job is to receive Buckets to process, to serialize their content into
+/// For metrics, its job is to receive Buckets to process, to serialize their content into
 /// a transaction, and it is pushing this transaction to a separate thread responsible
 /// of sending these transactions to the remote intake.
 /// It owns and runs a separate thread, which functions are part of ForwarderThread.
@@ -224,7 +225,7 @@ pub const Forwarder = struct {
 
         const value: f64 = switch (serie.metric_type) {
             .Gauge => @floatCast(serie.value),
-            .Counter => serie.value / @as(f64, @floatFromInt(serie.samples)),
+            .Counter => serie.value / sampling_interval,
             else => unreachable,
         };
 
@@ -450,7 +451,6 @@ test "transaction_mem_usage" {
     const serie = Serie{
         .metric_name = name,
         .metric_type = .Gauge,
-        .samples = 1,
         .value = 1,
         .tags = .empty,
     };
@@ -490,7 +490,6 @@ test "write_serie_test" {
     const serie = Serie{
         .metric_name = name,
         .metric_type = .Gauge,
-        .samples = 1,
         .value = 1,
         .tags = .empty,
     };

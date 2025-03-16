@@ -15,14 +15,13 @@ const TagsSetUnmanaged = @import("event.zig").TagsSetUnmanaged;
 const Transaction = @import("forwarder.zig").Transaction;
 
 /// default sampling interval is 10s.
-const sampling_interval: u64 = 10;
+pub const sampling_interval: u64 = 10;
 
 /// Serie is a list of values of a metric of type gauge or counter.
 pub const Serie = struct {
     metric_name: []const u8,
     metric_type: EventType,
     tags: TagsSetUnmanaged,
-    samples: u64,
     value: f64,
 
     pub fn deinit(self: *Serie, allocator: std.mem.Allocator) void {
@@ -136,6 +135,8 @@ pub const Sampler = struct {
         self.buckets.deinit(self.gpa);
     }
 
+    /// currentBuckets returns current bucket (based on the current time) in
+    /// which should be aggregated series and distributions.
     /// Not thread-safe.
     pub fn currentBucket(self: *Sampler) !*Bucket {
         const bucket_key = Bucket.key(std.time.timestamp());
@@ -215,7 +216,6 @@ pub const Sampler = struct {
 
         // existing
         if (k) |s| {
-            s.samples += 1;
             switch (s.metric_type) {
                 .Gauge => s.value = e.value,
                 else => s.value += e.value, // Counter
@@ -229,7 +229,6 @@ pub const Sampler = struct {
         try bucket.series.put(bucket.gpa, h, Serie{
             .metric_name = name,
             .metric_type = e.type,
-            .samples = 1,
             // FIXME(remy): for now, we have to copy the tagset since the metric memory
             // lives in the arena of the main thread.
             // If it were to live in the same gpa as one used by the bucket, we
@@ -388,7 +387,6 @@ test "sampling counter" {
     if (iterator.next()) |kv| {
         const serie = kv.value_ptr.*;
         assert(serie.value == 50.0);
-        assert(serie.samples == 1);
     }
 
     m.value = 20;
@@ -397,7 +395,6 @@ test "sampling counter" {
     currentBucket = try sampler.currentBucket();
     for (currentBucket.series.values()) |serie| {
         assert(serie.value == 70.0);
-        assert(serie.samples == 2);
     }
 
     sampler.deinit();

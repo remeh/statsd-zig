@@ -4,7 +4,7 @@ const builtin = @import("builtin");
 const AtomicQueue = @import("atomic_queue.zig").AtomicQueue;
 const Event = @import("event.zig").Event;
 const EventType = @import("event.zig").EventType;
-const PreallocatedPool = @import("preallocated_packets_pool.zig").PreallocatedPool;
+const PreallocatedPool = @import("preallocated_pool.zig").PreallocatedPool;
 const Sampler = @import("sampler.zig").Sampler;
 const Signal = @import("signal.zig").Signal;
 
