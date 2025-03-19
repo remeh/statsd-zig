@@ -17,7 +17,7 @@ const Transaction = @import("forwarder.zig").Transaction;
 /// default sampling interval is 10s.
 pub const sampling_interval: u64 = 10;
 
-/// Serie is a list of values of a metric of type gauge or counter.
+/// Serie is a metric of type gauge or counter.
 pub const Serie = struct {
     metric_name: []const u8,
     metric_type: EventType,
@@ -30,8 +30,7 @@ pub const Serie = struct {
     }
 };
 
-/// Serie is a list of values of a metric of type distribution,
-/// stored in a DDSketch.
+/// Distribution is a metric of type distribution, stored in a DDSketch.
 pub const Distribution = struct {
     metric_name: []const u8,
     tags: TagsSetUnmanaged,

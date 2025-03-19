@@ -5,7 +5,6 @@ and sending these metrics to Datadog.
 
 ## Getting started
 
-- `libcurl` must be available on the system on macOS
 - Build the binary with `zig build` (build with Zig `0.14.0`)
 - Set the environment variables `APIKEY` and `HOSTNAME` to configure the daemon
 
